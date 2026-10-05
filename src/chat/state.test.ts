@@ -1,157 +1,172 @@
 import { expect, it } from 'vitest';
 import { chatReducer, initialState } from './state';
-import type { Json } from '../api/green-api';
-const incoming = (chatId = '123', idMessage = 'm1'): Json => ({
-  typeWebhook: 'incomingMessageReceived',
-  idMessage,
-  timestamp: 1763115112,
-  senderData: { chatId, senderName: 'Анна', senderPhoneNumber: 79991234567 },
-  messageData: { typeMessage: 'textMessage', textMessageData: { textMessage: 'Привет!' } },
+import type { ChatEvent, Message } from './events';
+const message = (id = 'm1', outgoing = false, status?: Message['status']): Message => ({
+  id,
+  text: 'Привет!',
+  timestamp: 1763115112000,
+  outgoing,
+  status,
 });
-it('routes replies into the phone-created canonical Telegram chat', () => {
+const incoming = (chatId = '123', id = 'm1'): ChatEvent => ({
+  type: 'message',
+  chatId,
+  name: 'Анна',
+  phone: '79991234567',
+  message: message(id),
+});
+it('routes a reply into the phone-created chat', () => {
   const opened = chatReducer(initialState, {
     type: 'open',
     id: '123',
     name: '+79991234567',
     phone: '79991234567',
   });
-  const received = chatReducer(opened, { type: 'notification', body: incoming() });
+  const received = chatReducer(opened, { type: 'event', event: incoming() });
   expect(received.chats).toHaveLength(1);
   expect(received.chats[0].name).toBe('Анна');
   expect(received.chats[0].messages[0].text).toBe('Привет!');
   expect(received.chats[0].unread).toBe(0);
 });
 it('deduplicates redelivery without incrementing unread counts', () => {
-  const received = chatReducer(initialState, { type: 'notification', body: incoming() });
-  const repeated = chatReducer(received, { type: 'notification', body: incoming() });
-  expect(repeated).toBe(received);
-  expect(repeated.chats[0].unread).toBe(1);
-  expect(chatReducer(repeated, { type: 'select', id: '123' }).chats[0].unread).toBe(0);
+  const received = chatReducer(initialState, { type: 'event', event: incoming() });
+  expect(chatReducer(received, { type: 'event', event: incoming() })).toBe(received);
+  expect(received.chats[0].unread).toBe(1);
+  expect(chatReducer(received, { type: 'select', id: '123' }).chats[0].unread).toBe(0);
 });
-it('handles a status that arrives before the send response without regressing read status', () => {
+it('handles early delivery status without regressing read status', () => {
   const status = chatReducer(initialState, {
-    type: 'notification',
-    body: { typeWebhook: 'outgoingMessageStatus', chatId: '123', idMessage: 'm1', status: 'read' },
+    type: 'event',
+    event: { type: 'delivery', chatId: '123', messageId: 'm1', status: 'read' },
   });
   const sent = chatReducer(status, {
     type: 'sent',
     chatId: '123',
-    message: { id: 'm1', text: 'Hello', timestamp: 1, outgoing: true, status: 'queued' },
+    message: message('m1', true, 'queued'),
   });
   expect(sent.chats[0].messages[0].status).toBe('read');
   const late = chatReducer(sent, {
-    type: 'notification',
-    body: { typeWebhook: 'outgoingMessageStatus', chatId: '123', idMessage: 'm1', status: 'sent' },
+    type: 'event',
+    event: { type: 'delivery', chatId: '123', messageId: 'm1', status: 'sent' },
   });
   expect(late.chats[0].messages[0].status).toBe('read');
 });
-it('ignores non-text messages and supports extended text with URLs', () => {
-  const file = { ...incoming(), messageData: { typeMessage: 'imageMessage' } };
-  expect(chatReducer(initialState, { type: 'notification', body: file })).toBe(initialState);
-  const extended = {
-    ...incoming(),
-    messageData: {
-      typeMessage: 'extendedTextMessage',
-      extendedTextMessageData: { text: 'https://example.com' },
-    },
-  };
-  expect(
-    chatReducer(initialState, { type: 'notification', body: extended }).chats[0].messages[0].text,
-  ).toBe('https://example.com');
-});
-it('preserves send-before-reply order within a second because incoming timestamps have second precision', () => {
+it('preserves send-before-reply order within a second', () => {
   const sent = chatReducer(initialState, {
     type: 'sent',
     chatId: '123',
-    message: {
-      id: 'outgoing',
-      text: 'Hello',
-      timestamp: 1763115112999,
-      outgoing: true,
-      status: 'queued',
-    },
+    message: { ...message('outgoing', true, 'queued'), timestamp: 1763115112999 },
   });
-  const reply = chatReducer(sent, { type: 'notification', body: incoming() });
-  expect(reply.chats[0].messages.map((message) => message.id)).toEqual(['outgoing', 'm1']);
+  const reply = chatReducer(sent, { type: 'event', event: incoming() });
+  expect(reply.chats[0].messages.map((value) => value.id)).toEqual(['outgoing', 'm1']);
 });
-it('merges a late outgoing API echo without duplicate texts or loss of delivery status', () => {
+it('merges late outgoing echoes without duplicates or status regression', () => {
   const sent = chatReducer(initialState, {
     type: 'sent',
     chatId: '123',
-    message: {
-      id: 'm1',
-      text: 'Привет!',
-      timestamp: 1763115112000,
-      outgoing: true,
-      status: 'queued',
-    },
+    message: message('m1', true, 'queued'),
   });
-  const echo = { ...incoming(), typeWebhook: 'outgoingAPIMessageReceived' };
-  const echoed = chatReducer(sent, { type: 'notification', body: echo });
+  const echo: ChatEvent = { type: 'message', chatId: '123', message: message('m1', true, 'sent') };
+  const echoed = chatReducer(sent, { type: 'event', event: echo });
   expect(echoed.chats[0].messages).toHaveLength(1);
   expect(echoed.chats[0].messages[0].status).toBe('sent');
   const read = chatReducer(echoed, {
-    type: 'notification',
-    body: { typeWebhook: 'outgoingMessageStatus', chatId: '123', idMessage: 'm1', status: 'read' },
+    type: 'event',
+    event: { type: 'delivery', chatId: '123', messageId: 'm1', status: 'read' },
   });
-  expect(chatReducer(read, { type: 'notification', body: echo }).chats[0].messages[0].status).toBe(
+  expect(chatReducer(read, { type: 'event', event: echo }).chats[0].messages[0].status).toBe(
     'read',
   );
 });
-it('does not replace a recipient phone with an outgoing sender phone', () => {
+it('reports and dismisses a failure without guessing a message ID', () => {
+  const result = chatReducer(initialState, {
+    type: 'event',
+    event: {
+      type: 'delivery',
+      chatId: '123',
+      status: 'failed',
+      errorMessage: 'Ошибка мессенджера',
+    },
+  });
+  expect(result.deliveryError).toEqual({ chatId: '123', message: 'Ошибка мессенджера' });
+  expect(result.statuses).toEqual({});
+  expect(chatReducer(result, { type: 'dismissDeliveryError' }).deliveryError).toBeNull();
+});
+it('routes phone and LID replies and delivery statuses to the same chat', () => {
   const opened = chatReducer(initialState, {
     type: 'open',
-    id: '123',
+    id: '12345@lid',
     name: '+79991234567',
     phone: '79991234567',
+    aliases: ['79991234567@c.us'],
   });
-  const echo = {
-    ...incoming(),
-    typeWebhook: 'outgoingAPIMessageReceived',
-    senderData: { chatId: '123', senderPhoneNumber: 79876543210 },
-  };
-  expect(chatReducer(opened, { type: 'notification', body: echo }).chats[0].phone).toBe(
-    '79991234567',
-  );
-  const group = {
-    ...incoming(),
-    senderData: {
-      chatId: '-1001234',
-      chatType: 'supergroup',
-      chatName: 'Группа',
-      senderPhoneNumber: 79876543210,
-    },
-  };
-  expect(
-    chatReducer(initialState, { type: 'notification', body: group }).chats[0].phone,
-  ).toBeUndefined();
+  const reply = chatReducer(opened, { type: 'event', event: incoming('79991234567@c.us') });
+  expect(reply.chats).toHaveLength(1);
+  expect(reply.chats[0].unread).toBe(0);
+  const sent = chatReducer(reply, {
+    type: 'sent',
+    chatId: '12345@lid',
+    message: message('sent', true, 'queued'),
+  });
+  const delivered = chatReducer(sent, {
+    type: 'event',
+    event: { type: 'delivery', chatId: '79991234567@c.us', messageId: 'sent', status: 'delivered' },
+  });
+  expect(delivered.chats[0].messages[1].status).toBe('delivered');
 });
-it('reports unidentified failed and noAccount events without guessing a message ID', () => {
-  for (const status of ['failed', 'noAccount']) {
-    const result = chatReducer(initialState, {
-      type: 'notification',
-      body: {
-        typeWebhook: 'outgoingMessageStatus',
-        chatId: '123',
-        status,
-        description: 'chatId unresolvable on this session',
-      },
-    });
-    expect(result.deliveryError?.chatId).toBe('123');
-    expect(result.deliveryError?.message).toBeTruthy();
-    expect(result.statuses).toEqual({});
-    expect(chatReducer(result, { type: 'dismissDeliveryError' }).deliveryError).toBeNull();
-  }
-});
-it('maps noAccount with a message ID to a failed delivery', () => {
+it('keeps early alias delivery statuses until a canonical message arrives', () => {
   const status = chatReducer(initialState, {
-    type: 'notification',
-    body: {
-      typeWebhook: 'outgoingMessageStatus',
-      chatId: '123',
-      idMessage: 'm1',
-      status: 'noAccount',
-    },
+    type: 'event',
+    event: { type: 'delivery', chatId: '79991234567@c.us', messageId: 'sent', status: 'read' },
   });
-  expect(status.statuses['123:m1']).toBe('failed');
+  const opened = chatReducer(status, {
+    type: 'open',
+    id: '12345@lid',
+    name: '+79991234567',
+    phone: '79991234567',
+    aliases: ['79991234567@c.us'],
+  });
+  const sent = chatReducer(opened, {
+    type: 'sent',
+    chatId: '12345@lid',
+    message: message('sent', true, 'queued'),
+  });
+  expect(sent.chats[0].messages[0].status).toBe('read');
+});
+it('merges phone and LID chats already created by incoming notifications', () => {
+  const phoneChat = chatReducer(initialState, {
+    type: 'event',
+    event: incoming('79991234567@c.us'),
+  });
+  const lidChat = chatReducer(phoneChat, { type: 'event', event: incoming('12345@lid', 'm2') });
+  const opened = chatReducer(lidChat, {
+    type: 'open',
+    id: '12345@lid',
+    name: '+79991234567',
+    phone: '79991234567',
+    aliases: ['79991234567@c.us'],
+  });
+  expect(opened.chats).toHaveLength(1);
+  expect(opened.chats[0].messages).toHaveLength(2);
+  expect(opened.chats[0].unread).toBe(0);
+  expect(
+    chatReducer(opened, { type: 'event', event: incoming('79991234567@c.us') }).chats[0].messages,
+  ).toHaveLength(2);
+  const activePhone = chatReducer(lidChat, { type: 'select', id: '79991234567@c.us' });
+  const mergedActive = chatReducer(activePhone, {
+    type: 'open',
+    id: '12345@lid',
+    name: '+79991234567',
+    phone: '79991234567',
+    aliases: ['79991234567@c.us'],
+  });
+  expect(mergedActive.activeId).toBe('79991234567@c.us');
+  expect(mergedActive.chats[0].aliases).toContain('12345@lid');
+  expect(
+    chatReducer(mergedActive, {
+      type: 'sent',
+      chatId: '79991234567@c.us',
+      message: message('pending', true, 'queued'),
+    }).chats,
+  ).toHaveLength(1);
 });

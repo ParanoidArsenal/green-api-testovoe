@@ -1,7 +1,15 @@
 import { test, expect, type Page } from '@playwright/test';
+import type { MessengerId } from '../src/messengers/types';
+const providerFixtures = {
+  telegram: { instance: '4100000000', type: 'telegram', label: 'Telegram', limit: 4096 },
+  max: { instance: '3100000000', type: 'v3', label: 'MAX', limit: 4000 },
+  whatsapp: { instance: '1101000000', type: 'whatsapp', label: 'WhatsApp', limit: 20000 },
+};
 async function mockApi(
   page: Page,
   options: {
+    messenger?: MessengerId;
+    instanceType?: string;
     unauthorized?: boolean;
     failSend?: boolean;
     holdSend?: Promise<void>;
@@ -9,6 +17,8 @@ async function mockApi(
     settingsDisabled?: boolean;
   } = {},
 ) {
+  const messenger = options.messenger ?? 'telegram';
+  const checks: { method: string; body: object }[] = [];
   const queue: object[] = [];
   const sent: object[] = [];
   const deleted: number[] = [];
@@ -21,17 +31,25 @@ async function mockApi(
       data = { stateInstance: options.unauthorized ? 'notAuthorized' : 'authorized' };
     else if (url.pathname.includes('/getSettings/'))
       data = {
-        typeInstance: 'telegram',
+        ...(messenger === 'whatsapp' && !options.instanceType
+          ? { wid: '79876543210@c.us' }
+          : { typeInstance: options.instanceType ?? providerFixtures[messenger].type }),
         incomingWebhook: options.settingsDisabled ? 'no' : 'yes',
         webhookUrl: '',
       };
-    else if (url.pathname.includes('/checkAccount/'))
-      data = {
-        exist: true,
-        chatId:
-          route.request().postDataJSON().phoneNumber === 79991234567 ? '12345678' : '87654321',
-      };
-    else if (url.pathname.includes('/sendMessage/')) {
+    else if (url.pathname.includes('/checkAccount/') || url.pathname.includes('/checkWhatsapp/')) {
+      const body = route.request().postDataJSON();
+      checks.push({
+        method: url.pathname.includes('/checkWhatsapp/') ? 'checkWhatsapp' : 'checkAccount',
+        body,
+      });
+      const first = body.phoneNumber === 79991234567 || body.chatId === '79991234567@c.us';
+      const chatId = first ? '12345678' : '87654321';
+      data =
+        messenger === 'whatsapp'
+          ? { existsWhatsapp: true, chatId: `${chatId}@lid` }
+          : { exist: true, chatId };
+    } else if (url.pathname.includes('/sendMessage/')) {
       sendStarted++;
       if (options.holdSend) await options.holdSend;
       if (options.failSend) {
@@ -59,6 +77,7 @@ async function mockApi(
     await route.fulfill({ json: data });
   });
   return {
+    checks,
     queue,
     sent,
     deleted,
@@ -68,9 +87,10 @@ async function mockApi(
     },
   };
 }
-async function login(page: Page) {
+async function login(page: Page, messenger: MessengerId = 'telegram') {
   await page.goto('/');
-  await page.getByLabel('idInstance', { exact: true }).fill('4100000000');
+  await page.getByRole('combobox', { name: 'Мессенджер' }).selectOption(messenger);
+  await page.getByLabel('idInstance', { exact: true }).fill(providerFixtures[messenger].instance);
   await page.getByLabel('apiTokenInstance', { exact: true }).fill('test-token');
   await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
 }
@@ -347,4 +367,85 @@ test('mobile chat list shows prerequisites and the search focus has a visible ou
       .getByRole('textbox', { name: 'Поиск чатов' })
       .evaluate((element) => getComputedStyle(element).fontSize),
   ).toBe('16px');
+});
+for (const messenger of ['max', 'whatsapp'] as const) {
+  test(`${messenger}: selects adapter, resolves recipient, sends and receives in one chat`, async ({
+    page,
+  }, testInfo) => {
+    const api = await mockApi(page, { messenger });
+    await login(page, messenger);
+    await createChat(page);
+    const fixture = providerFixtures[messenger];
+    await expect(page.locator('.sidebar-header')).toContainText(fixture.label);
+    await expect(page.getByLabel('Сообщение', { exact: true })).toHaveAttribute(
+      'maxlength',
+      String(fixture.limit),
+    );
+    await page.getByLabel('Сообщение', { exact: true }).fill(`Привет из ${fixture.label}!`);
+    await page.getByRole('button', { name: 'Отправить сообщение' }).click();
+    await expect(page.getByRole('log')).toContainText(`Привет из ${fixture.label}!`);
+    const canonicalId = messenger === 'whatsapp' ? '12345678@lid' : '12345678';
+    const replyId = messenger === 'whatsapp' ? '79991234567@c.us' : canonicalId;
+    expect(api.sent).toEqual([{ chatId: canonicalId, message: `Привет из ${fixture.label}!` }]);
+    expect(api.checks).toEqual([
+      {
+        method: messenger === 'whatsapp' ? 'checkWhatsapp' : 'checkAccount',
+        body:
+          messenger === 'whatsapp' ? { chatId: '79991234567@c.us' } : { phoneNumber: 79991234567 },
+      },
+    ]);
+    api.queue.push({
+      typeWebhook: 'incomingMessageReceived',
+      instanceData: { typeInstance: fixture.type },
+      idMessage: 'reply',
+      timestamp: Math.floor(Date.now() / 1000),
+      senderData: {
+        chatId: replyId,
+        chatType: 'user',
+        senderName: 'Анна',
+        senderPhoneNumber: 79991234567,
+      },
+      messageData: {
+        typeMessage: 'textMessage',
+        textMessageData: { textMessage: `Ответ из ${fixture.label}` },
+      },
+    });
+    api.queue.push({
+      typeWebhook: 'outgoingMessageStatus',
+      instanceData: { typeInstance: fixture.type },
+      chatId: replyId,
+      idMessage: 'sent-1',
+      status: 'read',
+    });
+    await expect(page.getByRole('log')).toContainText(`Ответ из ${fixture.label}`);
+    await expect(page.getByLabel('Прочитано')).toBeVisible();
+    await expect(page.locator('.chat-item')).toHaveCount(1);
+    await expect.poll(() => api.deleted.length).toBe(2);
+    await page.screenshot({ path: testInfo.outputPath(`${messenger}-chat.png`), fullPage: true });
+  });
+}
+test('switching messenger resets credentials and rejects a mismatched instance', async ({
+  page,
+}) => {
+  await mockApi(page, { messenger: 'max', instanceType: 'telegram' });
+  await page.goto('/');
+  await page.getByLabel('idInstance', { exact: true }).fill('4100000000');
+  await page.getByLabel('apiTokenInstance', { exact: true }).fill('old-token');
+  await page.getByRole('button', { name: 'Показать токен' }).click();
+  await expect(page.getByLabel('apiTokenInstance', { exact: true })).toHaveAttribute(
+    'type',
+    'text',
+  );
+  await page.getByRole('combobox', { name: 'Мессенджер' }).selectOption('max');
+  await expect(page.getByLabel('idInstance', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('apiTokenInstance', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('apiTokenInstance', { exact: true })).toHaveAttribute(
+    'type',
+    'password',
+  );
+  await expect(page).toHaveTitle('MAX — GREEN-API Chat');
+  await page.getByLabel('idInstance', { exact: true }).fill('3100000000');
+  await page.getByLabel('apiTokenInstance', { exact: true }).fill('new-token');
+  await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Нужен инстанс MAX');
 });

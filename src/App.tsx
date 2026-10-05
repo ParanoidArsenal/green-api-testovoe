@@ -24,7 +24,8 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react';
-import { GreenApi, normalizePhone, validateCredentials } from './api/green-api';
+import { createMessengerAdapter, messengerInfo, messengers } from './messengers/adapters';
+import type { MessengerAdapter, MessengerId } from './messengers/types';
 import { pollNotifications, type PollState } from './api/polling';
 import { chatReducer, initialState, type Message } from './chat/state';
 
@@ -38,10 +39,21 @@ const date = (timestamp: number) =>
   });
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Произошла ошибка. Попробуйте еще раз.';
-function Logo({ small = false }: { small?: boolean }) {
+function Logo({
+  small = false,
+  messenger = 'telegram',
+}: {
+  small?: boolean;
+  messenger?: MessengerId;
+}) {
+  const Icon = messenger === 'telegram' ? Send : MessageCircle;
   return (
     <span className={`logo ${small ? 'small' : ''}`}>
-      <Send size={small ? 23 : 37} fill="currentColor" strokeWidth={1.4} />
+      <Icon
+        size={small ? 23 : 37}
+        fill={messenger === 'telegram' ? 'currentColor' : 'none'}
+        strokeWidth={1.4}
+      />
     </span>
   );
 }
@@ -99,7 +111,9 @@ function Modal({
     </dialog>
   );
 }
-function Login({ onConnect }: { onConnect: (api: GreenApi, warnings: string[]) => void }) {
+function Login({ onConnect }: { onConnect: (api: MessengerAdapter, warnings: string[]) => void }) {
+  const [messenger, setMessenger] = useState<MessengerId>('telegram');
+  const info = messengerInfo[messenger];
   const [idInstance, setId] = useState('');
   const [apiTokenInstance, setToken] = useState('');
   const [apiUrl, setUrl] = useState('');
@@ -110,7 +124,10 @@ function Login({ onConnect }: { onConnect: (api: GreenApi, warnings: string[]) =
   useEffect(() => () => controller.current?.abort(), []);
   const suggestedUrl = /^\d{4}/.test(idInstance.trim())
     ? `https://${idInstance.trim().slice(0, 4)}.api.green-api.com`
-    : 'https://4100.api.green-api.com';
+    : info.defaultApiUrl;
+  useEffect(() => {
+    document.title = `${info.label} — GREEN-API Chat`;
+  }, [info.label]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError('');
@@ -118,9 +135,11 @@ function Login({ onConnect }: { onConnect: (api: GreenApi, warnings: string[]) =
     controller.current = new AbortController();
     const signal = controller.current.signal;
     try {
-      const api = new GreenApi(
-        validateCredentials({ idInstance, apiTokenInstance, apiUrl: apiUrl || suggestedUrl }),
-      );
+      const api = createMessengerAdapter(messenger, {
+        idInstance,
+        apiTokenInstance,
+        apiUrl: apiUrl || suggestedUrl,
+      });
       const warnings = await api.connect(signal);
       if (!signal.aborted) onConnect(api, warnings);
     } catch (error) {
@@ -133,30 +152,51 @@ function Login({ onConnect }: { onConnect: (api: GreenApi, warnings: string[]) =
     <main className="login-page">
       <header className="landing-header">
         <div className="brand">
-          <Logo small />
+          <Logo small messenger={info.id} />
           <span>
-            Telegram <span className="brand-divider">/</span>{' '}
+            {info.label} <span className="brand-divider">/</span>{' '}
             <span className="muted">GREEN-API</span>
           </span>
         </div>
-        <a href="https://green-api.com/telegram/docs/" target="_blank" rel="noreferrer">
+        <a href={info.docsUrl} target="_blank" rel="noreferrer">
           Документация <ChevronRight size={16} />
         </a>
       </header>
       <section className="login-card">
-        <Logo />
+        <Logo messenger={info.id} />
         <h1>Начните разговор</h1>
         <p className="intro">
-          Подключите Telegram через GREEN-API,
+          Подключите {info.label} через GREEN-API,
           <br />
           чтобы отправлять и получать сообщения.
         </p>
         <form onSubmit={submit}>
+          <label htmlFor="messenger">Мессенджер</label>
+          <select
+            id="messenger"
+            value={messenger}
+            disabled={busy}
+            onChange={(event) => {
+              setMessenger(event.target.value as MessengerId);
+              setId('');
+              setToken('');
+              setShowToken(false);
+              setUrl('');
+              setError('');
+            }}
+          >
+            {messengers.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+          <p className="field-hint">Используйте данные инстанса выбранного мессенджера.</p>
           <label htmlFor="instance">idInstance</label>
           <input
             id="instance"
             inputMode="numeric"
-            placeholder="Например, 4100000000"
+            placeholder={`Например, ${info.exampleInstance}`}
             value={idInstance}
             onChange={(e) => setId(e.target.value)}
             required
@@ -227,7 +267,7 @@ function Login({ onConnect }: { onConnect: (api: GreenApi, warnings: string[]) =
         </div>
       </section>
       <footer className="landing-footer">
-        Только текст. Только самое нужное.<span>React · Telegram · GREEN-API</span>
+        Только текст. Только самое нужное.<span>React · GREEN-API</span>
       </footer>
     </main>
   );
@@ -261,10 +301,11 @@ function Messenger({
   warnings,
   logout,
 }: {
-  api: GreenApi;
+  api: MessengerAdapter;
   warnings: string[];
   logout: () => void;
 }) {
+  const info = api.info;
   const [state, dispatch] = useReducer(chatReducer, initialState);
   const [search, setSearch] = useState('');
   const [newChat, setNewChat] = useState(false);
@@ -301,19 +342,21 @@ function Messenger({
       api,
       controller.signal,
       async (body) => {
+        const event = api.decodeNotification(body);
+        if (!event) return;
         if (
-          body.typeWebhook === 'stateInstanceChanged' &&
-          body.stateInstance !== 'authorized' &&
+          event.type === 'state' &&
+          event.state !== 'authorized' &&
           (await api.getStateInstance(controller.signal)) !== 'authorized'
         ) {
           if (controller.signal.aborted) return;
           setPollState('stopped');
           setPollError(
-            'Инстанс отключен. Авторизуйте Telegram в кабинете GREEN-API и возобновите получение.',
+            'Инстанс отключен. Авторизуйте мессенджер в кабинете GREEN-API и возобновите получение.',
           );
           return false;
         }
-        dispatch({ type: 'notification', body });
+        dispatch({ type: 'event', event });
       },
       (status, message) => {
         setPollState(status);
@@ -351,10 +394,15 @@ function Messenger({
     setCreating(true);
     const signal = lifetime.current!.signal;
     try {
-      const normalized = normalizePhone(phone);
-      const id = await api.resolvePhone(normalized, signal);
+      const recipient = await api.resolvePhone(phone, signal);
       if (!signal.aborted) {
-        dispatch({ type: 'open', id, name: `+${normalized}`, phone: normalized });
+        dispatch({
+          type: 'open',
+          id: recipient.chatId,
+          name: `+${recipient.phone}`,
+          phone: recipient.phone,
+          aliases: recipient.aliases,
+        });
         setNewChat(false);
         setPhone('');
       }
@@ -367,7 +415,7 @@ function Messenger({
   }
   async function send(event?: FormEvent) {
     event?.preventDefault();
-    if (!chat || submitting.current || !draft.trim() || draft.length > 4096) return;
+    if (!chat || submitting.current || !draft.trim() || draft.length > info.maxTextLength) return;
     submitting.current = true;
     setSending(true);
     const chatId = chat.id;
@@ -391,7 +439,7 @@ function Messenger({
       if (!signal.aborted)
         setSendErrors((previous) => ({
           ...previous,
-          [chatId]: `${errorText(error)} Текст сохранен. При сетевой ошибке проверьте Telegram перед повторной отправкой.`,
+          [chatId]: `${errorText(error)} Текст сохранен. При сетевой ошибке проверьте ${info.label} перед повторной отправкой.`,
         }));
     } finally {
       submitting.current = false;
@@ -419,12 +467,12 @@ function Messenger({
                 {state.chats.find(
                   (item) =>
                     item.id === state.deliveryError?.chatId ||
-                    `${item.phone}@c.us` === state.deliveryError?.chatId,
+                    item.aliases.includes(state.deliveryError?.chatId ?? ''),
                 )?.name ?? state.deliveryError.chatId}
               </strong>
               <p>
                 {state.deliveryError.message} Сервис не указал ID сообщения, поэтому проверьте
-                результат в Telegram.
+                результат в {info.label}.
               </p>
             </div>
             <button
@@ -467,9 +515,9 @@ function Messenger({
         <aside className="sidebar">
           <header className="sidebar-header">
             <div className="brand">
-              <Logo small />
+              <Logo small messenger={info.id} />
               <div>
-                <strong>Telegram</strong>
+                <strong>{info.label}</strong>
                 <span className="account-label">GREEN-API · {api.credentials.idInstance}</span>
               </div>
             </div>
@@ -578,7 +626,7 @@ function Messenger({
                   <p>
                     {chat.phone && chat.name !== `+${chat.phone}` && <span>+{chat.phone}</span>}
                     <span role="status" aria-live="polite">
-                      Telegram ·{' '}
+                      {info.label} ·{' '}
                       {pollState === 'connected'
                         ? 'Получение включено'
                         : pollState === 'reconnecting'
@@ -659,7 +707,7 @@ function Messenger({
                     aria-label="Сообщение"
                     placeholder="Написать сообщение…"
                     rows={1}
-                    maxLength={4096}
+                    maxLength={info.maxTextLength}
                     value={draft}
                     onChange={(event) =>
                       setDrafts((previous) => ({ ...previous, [chat.id]: event.target.value }))
@@ -691,8 +739,14 @@ function Messenger({
                   <span className="desktop-hint">
                     Enter — отправить · Shift + Enter — новая строка
                   </span>
-                  <span className="mobile-hint">Только текст · до 4096 символов</span>
-                  {draft.length > 3500 && <span>{draft.length} / 4096</span>}
+                  <span className="mobile-hint">
+                    Только текст · до {info.maxTextLength} символов
+                  </span>
+                  {draft.length > info.maxTextLength * 0.85 && (
+                    <span>
+                      {draft.length} / {info.maxTextLength}
+                    </span>
+                  )}
                 </div>
               </div>
             </>
@@ -701,7 +755,7 @@ function Messenger({
               <div className="welcome-icon">
                 <Send size={48} strokeWidth={1.4} />
               </div>
-              <span className="eyebrow">ВАШ TELEGRAM, МИНИМАЛИСТИЧНО</span>
+              <span className="eyebrow">{info.label.toUpperCase()} · ТОЛЬКО ТЕКСТ</span>
               <h1>
                 Разговор начинается
                 <br />с одного сообщения
@@ -737,7 +791,7 @@ function Messenger({
           }}
         >
           <p className="modal-description">
-            Введите номер собеседника, зарегистрированного в Telegram.
+            Введите номер собеседника, зарегистрированного в {info.label}.
           </p>
           <form onSubmit={createChat}>
             <label htmlFor="phone">Номер телефона</label>
@@ -751,7 +805,7 @@ function Messenger({
               disabled={creating}
               autoFocus
             />
-            <p className="field-hint">Международный формат с кодом страны.</p>
+            <p className="field-hint">{info.phoneHint}</p>
             {chatError && <Alert>{chatError}</Alert>}
             <button className="primary full-width" disabled={creating}>
               {creating ? (
@@ -770,7 +824,7 @@ function Messenger({
         <Modal title="Выйти из чата?" close={() => setConfirmExit(false)}>
           <p className="modal-description">
             Токен, переписка и черновики будут удалены из памяти этой вкладки. Сообщения останутся в
-            Telegram.
+            {info.label}.
           </p>
           <div className="modal-actions">
             <button className="secondary" onClick={() => setConfirmExit(false)}>
@@ -786,7 +840,10 @@ function Messenger({
   );
 }
 export default function App() {
-  const [connection, setConnection] = useState<{ api: GreenApi; warnings: string[] } | null>(null);
+  const [connection, setConnection] = useState<{
+    api: MessengerAdapter;
+    warnings: string[];
+  } | null>(null);
   return connection ? (
     <Messenger
       api={connection.api}

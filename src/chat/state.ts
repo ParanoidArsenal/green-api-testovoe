@@ -1,16 +1,10 @@
-import { record, str, type Json } from '../api/green-api';
-export type MessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
-export interface Message {
-  id: string;
-  text: string;
-  timestamp: number;
-  outgoing: boolean;
-  status?: MessageStatus;
-}
+import type { ChatEvent, Message, MessageStatus } from './events';
+export type { Message, MessageStatus } from './events';
 export interface Chat {
   id: string;
   name: string;
   phone?: string;
+  aliases: string[];
   messages: Message[];
   unread: number;
 }
@@ -27,15 +21,32 @@ export const initialState: ChatState = {
   deliveryError: null,
 };
 export type Action =
-  | { type: 'open'; id: string; name: string; phone: string }
+  | { type: 'open'; id: string; name: string; phone: string; aliases?: string[] }
   | { type: 'select'; id: string | null }
   | { type: 'sent'; chatId: string; message: Message }
-  | { type: 'notification'; body: Json }
+  | { type: 'event'; event: ChatEvent }
   | { type: 'dismissDeliveryError' };
 const statuses: MessageStatus[] = ['queued', 'sent', 'delivered', 'read', 'failed'];
 function mergeStatus(current: MessageStatus | undefined, next: MessageStatus): MessageStatus {
   if (next === 'failed' || current === 'failed') return 'failed';
   return current && statuses.indexOf(current) > statuses.indexOf(next) ? current : next;
+}
+function matches(chat: Chat, id: string) {
+  return chat.id === id || chat.aliases.includes(id);
+}
+function sortMessages(messages: Message[]) {
+  return messages.sort((a, b) => Math.floor(a.timestamp / 1000) - Math.floor(b.timestamp / 1000));
+}
+function knownStatus(
+  state: ChatState,
+  chat: Chat,
+  messageId: string,
+  initial?: MessageStatus,
+): MessageStatus | undefined {
+  return [chat.id, ...chat.aliases].reduce((status, id) => {
+    const value = state.statuses[`${id}:${messageId}`];
+    return value ? mergeStatus(status, value) : status;
+  }, initial);
 }
 function addMessage(
   state: ChatState,
@@ -45,21 +56,32 @@ function addMessage(
   phone?: string,
 ): ChatState {
   let chats = state.chats;
-  if (!chats.some((chat) => chat.id === chatId))
-    chats = [
-      ...chats,
-      { id: chatId, name: name || (phone ? `+${phone}` : chatId), phone, messages: [], unread: 0 },
-    ];
-  const chat = chats.find((chat) => chat.id === chatId)!;
+  let chat = chats.find((item) => matches(item, chatId));
+  if (!chat) {
+    chat = {
+      id: chatId,
+      name: name || (phone ? `+${phone}` : chatId),
+      phone,
+      aliases: [],
+      messages: [],
+      unread: 0,
+    };
+    chats = [...chats, chat];
+  }
   const existing = chat.messages.find((item) => item.id === message.id);
   if (existing) {
     if (!message.outgoing || !existing.outgoing || !message.status) return state;
-    const status = mergeStatus(existing.status, message.status);
+    const status = knownStatus(
+      state,
+      chat,
+      message.id,
+      mergeStatus(existing.status, message.status),
+    );
     if (status === existing.status) return state;
     return {
       ...state,
       chats: chats.map((item) =>
-        item.id !== chatId
+        item.id !== chat.id
           ? item
           : {
               ...item,
@@ -70,21 +92,20 @@ function addMessage(
       ),
     };
   }
-  const knownStatus = state.statuses[`${chatId}:${message.id}`];
   return {
     ...state,
     chats: chats.map((item) =>
-      item.id !== chatId
+      item.id !== chat.id
         ? item
         : {
             ...item,
             name: name || item.name,
             phone: phone || item.phone,
-            messages: [
+            messages: sortMessages([
               ...item.messages,
-              { ...message, status: knownStatus ?? message.status },
-            ].sort((a, b) => Math.floor(a.timestamp / 1000) - Math.floor(b.timestamp / 1000)),
-            unread: item.unread + (!message.outgoing && state.activeId !== chatId ? 1 : 0),
+              { ...message, status: knownStatus(state, item, message.id, message.status) },
+            ]),
+            unread: item.unread + (!message.outgoing && state.activeId !== item.id ? 1 : 0),
           },
     ),
   };
@@ -98,85 +119,79 @@ export function chatReducer(state: ChatState, action: Action): ChatState {
       chats: state.chats.map((chat) => (chat.id === action.id ? { ...chat, unread: 0 } : chat)),
     };
   if (action.type === 'open') {
-    const exists = state.chats.some((chat) => chat.id === action.id);
+    const identifiers = [action.id, ...(action.aliases ?? [])];
+    const related = state.chats.filter((chat) => identifiers.some((id) => matches(chat, id)));
+    // Keep an existing ID stable for drafts and requests already in flight; aliases route both forms.
+    const target =
+      related.find((chat) => chat.id === state.activeId) ??
+      related.find((chat) => chat.id === action.id) ??
+      related[0];
+    const id = target?.id ?? action.id;
+    const aliases = [
+      ...new Set([...identifiers, ...related.flatMap((chat) => [chat.id, ...chat.aliases])]),
+    ].filter((value) => value !== id);
+    const merged = new Map<string, Message>();
+    for (const chat of related)
+      for (const message of chat.messages) {
+        const existing = merged.get(message.id);
+        merged.set(
+          message.id,
+          existing && message.status
+            ? { ...existing, status: mergeStatus(existing.status, message.status) }
+            : (existing ?? message),
+        );
+      }
+    const chat: Chat = {
+      id,
+      aliases,
+      name: target?.name || action.name,
+      phone: action.phone,
+      messages: sortMessages([...merged.values()]),
+      unread: 0,
+    };
+    chat.messages = chat.messages.map((message) => ({
+      ...message,
+      status: knownStatus(state, chat, message.id, message.status),
+    }));
     return {
       ...state,
-      activeId: action.id,
-      chats: exists
-        ? state.chats.map((chat) =>
-            chat.id === action.id ? { ...chat, phone: action.phone, unread: 0 } : chat,
-          )
-        : [
-            ...state.chats,
-            { id: action.id, name: action.name, phone: action.phone, messages: [], unread: 0 },
-          ],
+      activeId: id,
+      chats: [...state.chats.filter((chat) => !related.includes(chat)), chat],
     };
   }
   if (action.type === 'sent') return addMessage(state, action.chatId, action.message);
-  const body = action.body;
-  const type = str(body.typeWebhook);
-  const id = str(body.idMessage);
-  if (type === 'outgoingMessageStatus') {
-    const rawStatus = str(body.status);
-    const status = (rawStatus === 'noAccount' ? 'failed' : rawStatus) as MessageStatus;
-    const chatId = str(body.chatId);
-    if (!chatId || !statuses.includes(status)) return state;
-    if (!id) {
-      if (status !== 'failed') return state;
-      const message =
-        rawStatus === 'noAccount'
-          ? 'Аккаунт Telegram получателя не найден или номер скрыт настройками приватности.'
-          : body.description === 'chatId unresolvable on this session'
-            ? 'Telegram не смог определить получателя. Создайте чат заново по номеру телефона для проверки актуального идентификатора.'
-            : 'GREEN-API сообщил об ошибке отправки. Проверьте переписку в Telegram.';
-      return { ...state, deliveryError: { chatId, message } };
-    }
-    const key = `${chatId}:${id}`;
-    const next = mergeStatus(state.statuses[key], status);
-    return {
-      ...state,
-      statuses: { ...state.statuses, [key]: next },
-      chats: state.chats.map((chat) =>
-        chat.id !== chatId
-          ? chat
-          : {
-              ...chat,
-              messages: chat.messages.map((message) =>
-                message.id === id
-                  ? { ...message, status: mergeStatus(message.status, next) }
-                  : message,
-              ),
-            },
-      ),
-    };
-  }
-  if (
-    !['incomingMessageReceived', 'outgoingMessageReceived', 'outgoingAPIMessageReceived'].includes(
-      type,
-    )
-  )
-    return state;
-  const sender = record(body.senderData);
-  const data = record(body.messageData);
-  const text =
-    data.typeMessage === 'textMessage'
-      ? str(record(data.textMessageData).textMessage)
-      : data.typeMessage === 'extendedTextMessage'
-        ? str(record(data.extendedTextMessageData).text)
-        : '';
-  const chatId = str(sender.chatId);
-  if (!id || !chatId || !text || typeof body.timestamp !== 'number') return state;
-  const outgoing = type !== 'incomingMessageReceived';
-  return addMessage(
-    state,
-    chatId,
-    { id, text, timestamp: body.timestamp * 1000, outgoing, status: outgoing ? 'sent' : undefined },
-    str(sender.chatName) ||
-      (outgoing ? undefined : str(sender.senderContactName) || str(sender.senderName)),
-    !outgoing &&
-      (!sender.chatType || sender.chatType === 'user') &&
-      str(sender.senderPhoneNumber) !== '0'
-      ? str(sender.senderPhoneNumber) || undefined
-      : undefined,
-  );
+  const event = action.event;
+  if (event.type === 'state') return state;
+  if (event.type === 'message')
+    return addMessage(state, event.chatId, event.message, event.name, event.phone);
+  const chat = state.chats.find((item) => matches(item, event.chatId));
+  const chatId = chat?.id ?? event.chatId;
+  if (!event.messageId)
+    return event.status === 'failed'
+      ? {
+          ...state,
+          deliveryError: {
+            chatId,
+            message: event.errorMessage || 'Мессенджер сообщил об ошибке отправки.',
+          },
+        }
+      : state;
+  const key = `${chatId}:${event.messageId}`;
+  const next = mergeStatus(state.statuses[key], event.status);
+  return {
+    ...state,
+    statuses: { ...state.statuses, [key]: next },
+    chats: state.chats.map((item) =>
+      item.id !== chatId
+        ? item
+        : {
+            ...item,
+            messages: item.messages.map((message) =>
+              message.id === event.messageId
+                ? { ...message, status: mergeStatus(message.status, next) }
+                : message,
+            ),
+          },
+    ),
+  };
 }

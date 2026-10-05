@@ -56,8 +56,11 @@ export function validateCredentials(credentials: Credentials): Credentials {
   }
   return { idInstance, apiTokenInstance, apiUrl: url.origin };
 }
-export class GreenApi {
-  constructor(public credentials: Credentials) {}
+export class GreenApiClient {
+  readonly credentials: Credentials;
+  constructor(credentials: Credentials) {
+    this.credentials = validateCredentials(credentials);
+  }
   async request(
     method: string,
     verb: 'GET' | 'POST' | 'DELETE',
@@ -91,7 +94,7 @@ export class GreenApi {
         401: 'Неверные учетные данные GREEN-API.',
         403: 'Доступ запрещен. Проверьте токен и состояние инстанса.',
         429: 'Превышен лимит запросов. Повторите попытку позже.',
-        469: 'Telegram временно ограничил поиск контактов. Повторите попытку позже.',
+        469: 'Мессенджер временно ограничил поиск контактов. Повторите попытку позже.',
       };
       // Do not expose upstream bodies or URLs: they may contain credentials.
       throw new ApiError(
@@ -110,48 +113,8 @@ export class GreenApi {
     if (!str(state.stateInstance)) throw new ApiError('GREEN-API не вернул состояние инстанса.');
     return str(state.stateInstance);
   }
-  async connect(signal: AbortSignal): Promise<string[]> {
-    if ((await this.getStateInstance(signal)) !== 'authorized')
-      throw new ApiError(
-        'Инстанс не авторизован. Подключите Telegram в личном кабинете GREEN-API.',
-      );
-    const settings = record(await this.request('getSettings', 'GET', signal));
-    if (settings.typeInstance !== 'telegram')
-      throw new ApiError('Нужен инстанс Telegram. Проверьте данные в личном кабинете GREEN-API.');
-    const warnings: string[] = [];
-    if (settings.incomingWebhook !== 'yes')
-      warnings.push(
-        'Включите «Получать уведомления о входящих сообщениях и файлах» в настройках инстанса GREEN-API.',
-      );
-    if (settings.webhookUrl)
-      warnings.push(
-        'Для HTTP API очистите Webhook URL в настройках инстанса, чтобы уведомления поступали в этот чат.',
-      );
-    return warnings;
-  }
-  async resolvePhone(phone: string, signal: AbortSignal): Promise<string> {
-    const data = record(
-      await this.request('checkAccount', 'POST', signal, {
-        phoneNumber: Number(normalizePhone(phone)),
-      }),
-    );
-    if (data.status === false)
-      throw new ApiError(
-        'Telegram не смог проверить номер. Инстанс может быть не готов или достигнут лимит поиска контактов.',
-      );
-    if (data.exist !== true || !str(data.chatId))
-      throw new ApiError('Аккаунт Telegram не найден или номер скрыт настройками приватности.');
-    return str(data.chatId);
-  }
-  async sendMessage(chatId: string, message: string, signal: AbortSignal): Promise<string> {
-    if (!message.trim() || message.length > 4096)
-      throw new Error('Введите текст длиной от 1 до 4096 символов.');
-    const data = record(await this.request('sendMessage', 'POST', signal, { chatId, message }));
-    if (!str(data.idMessage))
-      throw new ApiError(
-        'GREEN-API не вернул идентификатор сообщения. Проверьте результат в Telegram перед повторной отправкой.',
-      );
-    return str(data.idMessage);
+  async getSettings(signal: AbortSignal): Promise<Json> {
+    return record(await this.request('getSettings', 'GET', signal));
   }
   receive(signal: AbortSignal) {
     return this.request('receiveNotification', 'GET', signal, undefined, '?receiveTimeout=30');

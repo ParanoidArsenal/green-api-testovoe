@@ -1,4 +1,5 @@
-import { ApiError, record, type GreenApi, type Json } from './green-api';
+import { ApiError, record, type Json } from './green-api';
+import type { MessengerAdapter } from '../messengers/types';
 export type PollState = 'connected' | 'reconnecting' | 'stopped';
 export function pause(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -17,7 +18,7 @@ export function pause(ms: number, signal: AbortSignal): Promise<void> {
 }
 // One sequential consumer; acknowledgements happen only after local processing succeeds.
 export async function pollNotifications(
-  api: Pick<GreenApi, 'receive' | 'acknowledge'>,
+  api: Pick<MessengerAdapter, 'receive' | 'acknowledge'>,
   signal: AbortSignal,
   onNotification: (body: Json) => void | false | Promise<void | false>,
   onState: (state: PollState, message?: string) => void,
