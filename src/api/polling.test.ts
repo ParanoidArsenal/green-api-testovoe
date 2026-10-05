@@ -79,3 +79,41 @@ it('acknowledges an account-state event before stopping the consumer', async () 
   expect(api.acknowledge).toHaveBeenCalledWith(9, expect.any(AbortSignal));
   expect(api.receive).toHaveBeenCalledTimes(1);
 });
+it('awaits asynchronous state verification before acknowledging an event', async () => {
+  const sequence: string[] = [];
+  const api = {
+    receive: vi
+      .fn()
+      .mockResolvedValue({ receiptId: 9, body: { typeWebhook: 'stateInstanceChanged' } }),
+    acknowledge: vi.fn(async () => {
+      sequence.push('delete');
+    }),
+  };
+  await pollNotifications(
+    api,
+    new AbortController().signal,
+    async () => {
+      await Promise.resolve();
+      sequence.push('verified');
+      return false as const;
+    },
+    vi.fn(),
+  );
+  expect(sequence).toEqual(['verified', 'delete']);
+});
+it('does not acknowledge when logout interrupts asynchronous event processing', async () => {
+  const controller = new AbortController();
+  const api = {
+    receive: vi.fn().mockResolvedValue({ receiptId: 9, body: {} }),
+    acknowledge: vi.fn(),
+  };
+  await pollNotifications(
+    api,
+    controller.signal,
+    async () => {
+      controller.abort();
+    },
+    vi.fn(),
+  );
+  expect(api.acknowledge).not.toHaveBeenCalled();
+});

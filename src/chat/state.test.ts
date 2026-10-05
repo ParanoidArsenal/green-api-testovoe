@@ -74,3 +74,84 @@ it('preserves send-before-reply order within a second because incoming timestamp
   const reply = chatReducer(sent, { type: 'notification', body: incoming() });
   expect(reply.chats[0].messages.map((message) => message.id)).toEqual(['outgoing', 'm1']);
 });
+it('merges a late outgoing API echo without duplicate texts or loss of delivery status', () => {
+  const sent = chatReducer(initialState, {
+    type: 'sent',
+    chatId: '123',
+    message: {
+      id: 'm1',
+      text: 'Привет!',
+      timestamp: 1763115112000,
+      outgoing: true,
+      status: 'queued',
+    },
+  });
+  const echo = { ...incoming(), typeWebhook: 'outgoingAPIMessageReceived' };
+  const echoed = chatReducer(sent, { type: 'notification', body: echo });
+  expect(echoed.chats[0].messages).toHaveLength(1);
+  expect(echoed.chats[0].messages[0].status).toBe('sent');
+  const read = chatReducer(echoed, {
+    type: 'notification',
+    body: { typeWebhook: 'outgoingMessageStatus', chatId: '123', idMessage: 'm1', status: 'read' },
+  });
+  expect(chatReducer(read, { type: 'notification', body: echo }).chats[0].messages[0].status).toBe(
+    'read',
+  );
+});
+it('does not replace a recipient phone with an outgoing sender phone', () => {
+  const opened = chatReducer(initialState, {
+    type: 'open',
+    id: '123',
+    name: '+79991234567',
+    phone: '79991234567',
+  });
+  const echo = {
+    ...incoming(),
+    typeWebhook: 'outgoingAPIMessageReceived',
+    senderData: { chatId: '123', senderPhoneNumber: 79876543210 },
+  };
+  expect(chatReducer(opened, { type: 'notification', body: echo }).chats[0].phone).toBe(
+    '79991234567',
+  );
+  const group = {
+    ...incoming(),
+    senderData: {
+      chatId: '-1001234',
+      chatType: 'supergroup',
+      chatName: 'Группа',
+      senderPhoneNumber: 79876543210,
+    },
+  };
+  expect(
+    chatReducer(initialState, { type: 'notification', body: group }).chats[0].phone,
+  ).toBeUndefined();
+});
+it('reports unidentified failed and noAccount events without guessing a message ID', () => {
+  for (const status of ['failed', 'noAccount']) {
+    const result = chatReducer(initialState, {
+      type: 'notification',
+      body: {
+        typeWebhook: 'outgoingMessageStatus',
+        chatId: '123',
+        status,
+        description: 'chatId unresolvable on this session',
+      },
+    });
+    expect(result.deliveryError?.chatId).toBe('123');
+    expect(result.deliveryError?.message).toBeTruthy();
+    expect(result.statuses).toEqual({});
+    expect(chatReducer(result, { type: 'dismissDeliveryError' }).deliveryError).toBeNull();
+  }
+});
+it('maps noAccount with a message ID to a failed delivery', () => {
+  const status = chatReducer(initialState, {
+    type: 'notification',
+    body: {
+      typeWebhook: 'outgoingMessageStatus',
+      chatId: '123',
+      idMessage: 'm1',
+      status: 'noAccount',
+    },
+  });
+  expect(status.statuses['123:m1']).toBe('failed');
+});

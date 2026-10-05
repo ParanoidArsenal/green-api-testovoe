@@ -1,6 +1,15 @@
-import { useEffect, useReducer, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useReducer,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import {
   ArrowLeft,
+  ArrowDown,
   Check,
   CheckCheck,
   ChevronRight,
@@ -54,21 +63,34 @@ function Modal({
   close: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const dialog = ref.current!;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog.showModal();
-    return () => dialog.close();
+    (
+      dialog.querySelector<HTMLInputElement>('input:not([disabled])') ??
+      dialog.querySelector<HTMLButtonElement>('button')
+    )?.focus();
+    return () => {
+      dialog.close();
+      if (opener?.isConnected) opener.focus();
+    };
   }, []);
   return (
     <dialog
       ref={ref}
-      onCancel={close}
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        close();
+      }}
       onClick={(event) => {
         if (event.target === ref.current) close();
       }}
     >
       <div className="modal-heading">
-        <h2>{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <button className="icon-button" onClick={close} aria-label="Закрыть">
           <X size={22} />
         </button>
@@ -195,7 +217,7 @@ function Login({ onConnect }: { onConnect: (api: GreenApi, warnings: string[]) =
         </form>
         <p className="privacy">
           <ShieldCheck size={16} />
-          Токен хранится только в памяти этой вкладки.
+          Токен, чаты и черновики удаляются при обновлении вкладки.
         </p>
         <div className="login-help">
           Еще нет инстанса?{' '}
@@ -251,13 +273,16 @@ function Messenger({
   const [chatError, setChatError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState('');
+  const [unseenBelow, setUnseenBelow] = useState(false);
+  const [sendErrors, setSendErrors] = useState<Record<string, string>>({});
   const [pollState, setPollState] = useState<PollState>('connected');
   const [pollError, setPollError] = useState('');
   const [pollAttempt, setPollAttempt] = useState(0);
   const [confirmExit, setConfirmExit] = useState(false);
   const lifetime = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(true);
+  const lastViewedChat = useRef<string | undefined>(undefined);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const submitting = useRef(false);
   const resolving = useRef(false);
@@ -275,8 +300,13 @@ function Messenger({
     void pollNotifications(
       api,
       controller.signal,
-      (body) => {
-        if (body.typeWebhook === 'stateInstanceChanged' && body.stateInstance !== 'authorized') {
+      async (body) => {
+        if (
+          body.typeWebhook === 'stateInstanceChanged' &&
+          body.stateInstance !== 'authorized' &&
+          (await api.getStateInstance(controller.signal)) !== 'authorized'
+        ) {
+          if (controller.signal.aborted) return;
           setPollState('stopped');
           setPollError(
             'Инстанс отключен. Авторизуйте Telegram в кабинете GREEN-API и возобновите получение.',
@@ -293,12 +323,26 @@ function Messenger({
     return () => controller.abort();
   }, [api, pollAttempt]);
   useEffect(() => {
-    end.current?.scrollIntoView({ behavior: 'smooth' });
+    const changedChat = lastViewedChat.current !== chat?.id;
+    if (changedChat || nearBottom.current) {
+      nearBottom.current = true;
+      setUnseenBelow(false);
+      end.current?.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      });
+    }
+    if (!changedChat && !nearBottom.current) setUnseenBelow(true);
+    lastViewedChat.current = chat?.id;
   }, [chat?.id, chat?.messages.length]);
   useEffect(() => {
-    setSendError('');
     textarea.current?.focus();
   }, [chat?.id]);
+  useEffect(() => {
+    const field = textarea.current;
+    if (!field) return;
+    field.style.height = 'auto';
+    field.style.height = `${Math.min(field.scrollHeight + field.offsetHeight - field.clientHeight, 160)}px`;
+  }, [draft, chat?.id]);
   async function createChat(event: FormEvent) {
     event.preventDefault();
     if (resolving.current) return;
@@ -326,8 +370,8 @@ function Messenger({
     if (!chat || submitting.current || !draft.trim() || draft.length > 4096) return;
     submitting.current = true;
     setSending(true);
-    setSendError('');
     const chatId = chat.id;
+    setSendErrors((previous) => ({ ...previous, [chatId]: '' }));
     const text = draft;
     const signal = lifetime.current!.signal;
     try {
@@ -345,9 +389,10 @@ function Messenger({
       }
     } catch (error) {
       if (!signal.aborted)
-        setSendError(
-          `${errorText(error)} Текст сохранен. При сетевой ошибке проверьте Telegram перед повторной отправкой.`,
-        );
+        setSendErrors((previous) => ({
+          ...previous,
+          [chatId]: `${errorText(error)} Текст сохранен. При сетевой ошибке проверьте Telegram перед повторной отправкой.`,
+        }));
     } finally {
       submitting.current = false;
       if (!signal.aborted) {
@@ -364,100 +409,33 @@ function Messenger({
   );
   return (
     <main className={`messenger ${chat ? 'chat-open' : ''}`}>
-      <aside className="sidebar">
-        <header className="sidebar-header">
-          <div className="brand">
-            <Logo small />
+      <div className="global-notices">
+        {state.deliveryError && (
+          <div className="delivery-error" role="alert">
+            <CircleAlert size={18} />
             <div>
-              <strong>Telegram</strong>
-              <span className="account-label">GREEN-API · {api.credentials.idInstance}</span>
+              <strong>
+                Ошибка отправки ·{' '}
+                {state.chats.find(
+                  (item) =>
+                    item.id === state.deliveryError?.chatId ||
+                    `${item.phone}@c.us` === state.deliveryError?.chatId,
+                )?.name ?? state.deliveryError.chatId}
+              </strong>
+              <p>
+                {state.deliveryError.message} Сервис не указал ID сообщения, поэтому проверьте
+                результат в Telegram.
+              </p>
             </div>
+            <button
+              className="icon-button"
+              aria-label="Закрыть ошибку отправки"
+              onClick={() => dispatch({ type: 'dismissDeliveryError' })}
+            >
+              <X size={18} />
+            </button>
           </div>
-          <button
-            className="icon-button"
-            aria-label="Выйти"
-            title="Выйти"
-            onClick={() => setConfirmExit(true)}
-          >
-            <LogOut size={20} />
-          </button>
-        </header>
-        <div className="sidebar-tools">
-          <div className="search-input">
-            <Search size={19} />
-            <input
-              aria-label="Поиск чатов"
-              placeholder="Поиск"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-          </div>
-          <button
-            className="new-chat-button"
-            onClick={() => {
-              setChatError('');
-              setNewChat(true);
-            }}
-          >
-            <Plus size={20} />
-            Новый чат
-          </button>
-        </div>
-        <div className="chat-list" aria-label="Чаты">
-          {sortedChats.map((item) => {
-            const last = item.messages.at(-1);
-            return (
-              <button
-                className={`chat-item ${chat?.id === item.id ? 'selected' : ''}`}
-                key={item.id}
-                onClick={() => dispatch({ type: 'select', id: item.id })}
-              >
-                <span className="avatar">
-                  {item.name.startsWith('+')
-                    ? item.name.slice(-2)
-                    : item.name.slice(0, 2).toUpperCase()}
-                </span>
-                <span className="chat-item-content">
-                  <span className="chat-item-top">
-                    <strong>{item.name}</strong>
-                    <time>{last ? time(last.timestamp) : ''}</time>
-                  </span>
-                  <span className="chat-item-bottom">
-                    <span>
-                      {last ? `${last.outgoing ? 'Вы: ' : ''}${last.text}` : 'Начните разговор'}
-                    </span>
-                    {item.unread > 0 && <span className="unread">{item.unread}</span>}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-          {!state.chats.length && (
-            <div className="sidebar-empty">
-              <MessageCircle size={30} />
-              <strong>Здесь будут ваши чаты</strong>
-              <p>Добавьте собеседника по номеру телефона.</p>
-            </div>
-          )}
-          {state.chats.length > 0 && !visibleChats.length && (
-            <p className="no-results">Чаты не найдены</p>
-          )}
-        </div>
-        <footer className="connection">
-          <span className={`status-dot ${pollState}`} />
-          <span>
-            {pollState === 'connected'
-              ? 'Получение сообщений включено'
-              : pollState === 'reconnecting'
-                ? 'Переподключение…'
-                : 'Получение приостановлено'}
-          </span>
-          {pollState === 'stopped' && (
-            <button onClick={() => setPollAttempt((value) => value + 1)}>Повторить</button>
-          )}
-        </footer>
-      </aside>
-      <section className="conversation">
+        )}
         {warnings.length > 0 && (
           <div className="notice">
             <CircleAlert size={18} />
@@ -473,141 +451,284 @@ function Messenger({
         )}
         {pollError && (
           <div className="poll-error" role="status">
-            {pollError}
-            {pollState === 'reconnecting' && ' Повторяем подключение автоматически.'}
+            <span>
+              {pollError}
+              {pollState === 'reconnecting' && ' Повторяем подключение автоматически.'}
+            </span>
+            {pollState === 'stopped' && (
+              <button className="secondary" onClick={() => setPollAttempt((value) => value + 1)}>
+                Возобновить получение
+              </button>
+            )}
           </div>
         )}
-        {chat ? (
-          <>
-            <header className="conversation-header">
-              <button
-                className="icon-button back"
-                aria-label="Назад к чатам"
-                onClick={() => dispatch({ type: 'select', id: null })}
-              >
-                <ArrowLeft size={23} />
-              </button>
-              <span className="avatar header-avatar">
-                {chat.name.startsWith('+')
-                  ? chat.name.slice(-2)
-                  : chat.name.slice(0, 2).toUpperCase()}
-              </span>
+      </div>
+      <div className="chat-layout">
+        <aside className="sidebar">
+          <header className="sidebar-header">
+            <div className="brand">
+              <Logo small />
               <div>
-                <h1>{chat.name}</h1>
-                <p>
-                  {chat.phone && chat.name !== `+${chat.phone}` ? `+${chat.phone} · ` : ''}Telegram
-                  · текстовые сообщения
-                </p>
-              </div>
-            </header>
-            <div className="messages" role="log" aria-label="Сообщения" aria-live="polite">
-              <div className="message-column">
-                {!chat.messages.length && (
-                  <div className="chat-start">
-                    <MessageCircle size={28} />
-                    <strong>Первое сообщение — за вами</strong>
-                    <p>Напишите собеседнику. Его ответ появится здесь.</p>
-                  </div>
-                )}
-                {chat.messages.map((message, index) => (
-                  <div key={message.id}>
-                    {(index === 0 ||
-                      date(message.timestamp) !== date(chat.messages[index - 1].timestamp)) && (
-                      <div className="date-separator">
-                        <span>{date(message.timestamp)}</span>
-                      </div>
-                    )}
-                    <div className={`message-row ${message.outgoing ? 'outgoing' : 'incoming'}`}>
-                      <div className={`bubble ${message.status === 'failed' ? 'failed' : ''}`}>
-                        <p>{message.text}</p>
-                        <span className="message-meta">
-                          {message.status === 'failed' && <span>Не доставлено</span>}
-                          <time dateTime={new Date(message.timestamp).toISOString()}>
-                            {time(message.timestamp)}
-                          </time>
-                          <Delivery message={message} />
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                <div ref={end} />
+                <strong>Telegram</strong>
+                <span className="account-label">GREEN-API · {api.credentials.idInstance}</span>
               </div>
             </div>
-            <div className="composer-area">
-              {sendError && <Alert>{sendError}</Alert>}
-              <form className="composer" onSubmit={send}>
-                <textarea
-                  ref={textarea}
-                  aria-label="Сообщение"
-                  placeholder="Написать сообщение…"
-                  rows={1}
-                  maxLength={4096}
-                  value={draft}
-                  onChange={(event) =>
-                    setDrafts((previous) => ({ ...previous, [chat.id]: event.target.value }))
-                  }
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === 'Enter' &&
-                      !event.shiftKey &&
-                      !event.nativeEvent.isComposing
-                    ) {
-                      event.preventDefault();
-                      void send();
-                    }
-                  }}
-                />
-                <button
-                  className="send-button"
-                  aria-label="Отправить сообщение"
-                  disabled={sending || !draft.trim()}
-                >
-                  {sending ? (
-                    <span className="spinner" />
-                  ) : (
-                    <Send size={23} fill="currentColor" strokeWidth={1.5} />
-                  )}
-                </button>
-              </form>
-              <div className="composer-hint">
-                <span>Enter — отправить · Shift + Enter — новая строка</span>
-                {draft.length > 3500 && <span>{draft.length} / 4096</span>}
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="welcome">
-            <div className="welcome-icon">
-              <Send size={48} strokeWidth={1.4} />
-            </div>
-            <span className="eyebrow">ВАШ TELEGRAM, МИНИМАЛИСТИЧНО</span>
-            <h1>
-              Разговор начинается
-              <br />с одного сообщения
-            </h1>
-            <p>
-              Создайте новый чат по номеру телефона
-              <br />
-              или выберите разговор слева.
-            </p>
             <button
-              className="primary"
+              className="icon-button"
+              aria-label="Выйти"
+              title="Выйти"
+              onClick={() => setConfirmExit(true)}
+            >
+              <LogOut size={20} />
+            </button>
+          </header>
+          <div className="sidebar-tools">
+            <div className="search-input">
+              <Search size={19} />
+              <input
+                aria-label="Поиск чатов"
+                placeholder="Поиск"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <button
+              className="new-chat-button"
               onClick={() => {
                 setChatError('');
                 setNewChat(true);
               }}
             >
-              <Plus size={19} />
-              Создать чат
+              <Plus size={20} />
+              Новый чат
             </button>
-            <span className="welcome-note">
-              <ShieldCheck size={15} />
-              Сообщения отправляются через GREEN-API
-            </span>
           </div>
-        )}
-      </section>
+          <div className="chat-list" aria-label="Чаты">
+            {sortedChats.map((item) => {
+              const last = item.messages.at(-1);
+              return (
+                <button
+                  className={`chat-item ${chat?.id === item.id ? 'selected' : ''}`}
+                  key={item.id}
+                  onClick={() => dispatch({ type: 'select', id: item.id })}
+                >
+                  <span className="avatar">
+                    {item.name.startsWith('+')
+                      ? item.name.slice(-2)
+                      : item.name.slice(0, 2).toUpperCase()}
+                  </span>
+                  <span className="chat-item-content">
+                    <span className="chat-item-top">
+                      <strong>{item.name}</strong>
+                      <time>{last ? time(last.timestamp) : ''}</time>
+                    </span>
+                    <span className="chat-item-bottom">
+                      <span>
+                        {last ? `${last.outgoing ? 'Вы: ' : ''}${last.text}` : 'Начните разговор'}
+                      </span>
+                      {item.unread > 0 && <span className="unread">{item.unread}</span>}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+            {!state.chats.length && (
+              <div className="sidebar-empty">
+                <MessageCircle size={30} />
+                <strong>Здесь будут ваши чаты</strong>
+                <p>Добавьте собеседника по номеру телефона.</p>
+              </div>
+            )}
+            {state.chats.length > 0 && !visibleChats.length && (
+              <p className="no-results">Чаты не найдены</p>
+            )}
+          </div>
+          <footer className="connection" role="status" aria-live="polite">
+            <span className={`status-dot ${pollState}`} />
+            <span>
+              {pollState === 'connected'
+                ? 'Получение сообщений включено'
+                : pollState === 'reconnecting'
+                  ? 'Переподключение…'
+                  : 'Получение приостановлено'}
+            </span>
+            {pollState === 'stopped' && (
+              <button onClick={() => setPollAttempt((value) => value + 1)}>Повторить</button>
+            )}
+          </footer>
+        </aside>
+        <section className="conversation">
+          {chat ? (
+            <>
+              <header className="conversation-header">
+                <button
+                  className="icon-button back"
+                  aria-label="Назад к чатам"
+                  onClick={() => dispatch({ type: 'select', id: null })}
+                >
+                  <ArrowLeft size={23} />
+                </button>
+                <span className="avatar header-avatar">
+                  {chat.name.startsWith('+')
+                    ? chat.name.slice(-2)
+                    : chat.name.slice(0, 2).toUpperCase()}
+                </span>
+                <div>
+                  <h1 title={chat.name}>{chat.name}</h1>
+                  <p>
+                    {chat.phone && chat.name !== `+${chat.phone}` && <span>+{chat.phone}</span>}
+                    <span role="status" aria-live="polite">
+                      Telegram ·{' '}
+                      {pollState === 'connected'
+                        ? 'Получение включено'
+                        : pollState === 'reconnecting'
+                          ? 'Переподключение…'
+                          : 'Получение приостановлено'}
+                    </span>
+                  </p>
+                </div>
+              </header>
+              <div
+                className="messages"
+                role="log"
+                aria-label="Сообщения"
+                aria-live="polite"
+                onScroll={(event) => {
+                  const element = event.currentTarget;
+                  nearBottom.current =
+                    element.scrollHeight - element.clientHeight - element.scrollTop < 80;
+                  if (nearBottom.current) setUnseenBelow(false);
+                }}
+              >
+                <div className="message-column">
+                  {!chat.messages.length && (
+                    <div className="chat-start">
+                      <MessageCircle size={28} />
+                      <strong>Первое сообщение — за вами</strong>
+                      <p>Напишите собеседнику. Его ответ появится здесь.</p>
+                    </div>
+                  )}
+                  {chat.messages.map((message, index) => (
+                    <div key={message.id}>
+                      {(index === 0 ||
+                        date(message.timestamp) !== date(chat.messages[index - 1].timestamp)) && (
+                        <div className="date-separator">
+                          <span>{date(message.timestamp)}</span>
+                        </div>
+                      )}
+                      <div className={`message-row ${message.outgoing ? 'outgoing' : 'incoming'}`}>
+                        <div className={`bubble ${message.status === 'failed' ? 'failed' : ''}`}>
+                          <p>{message.text}</p>
+                          <span className="message-meta">
+                            {message.status === 'failed' && <span>Не доставлено</span>}
+                            <time dateTime={new Date(message.timestamp).toISOString()}>
+                              {time(message.timestamp)}
+                            </time>
+                            <Delivery message={message} />
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={end} />
+                </div>
+              </div>
+              <div className="composer-area">
+                {unseenBelow && (
+                  <div className="jump-row">
+                    <button
+                      className="secondary"
+                      onClick={() => {
+                        nearBottom.current = true;
+                        setUnseenBelow(false);
+                        end.current?.scrollIntoView({
+                          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                            ? 'auto'
+                            : 'smooth',
+                        });
+                      }}
+                    >
+                      <ArrowDown size={16} />К новым сообщениям
+                    </button>
+                  </div>
+                )}
+                {sendErrors[chat.id] && <Alert>{sendErrors[chat.id]}</Alert>}
+                <form className="composer" onSubmit={send}>
+                  <textarea
+                    ref={textarea}
+                    aria-label="Сообщение"
+                    placeholder="Написать сообщение…"
+                    rows={1}
+                    maxLength={4096}
+                    value={draft}
+                    onChange={(event) =>
+                      setDrafts((previous) => ({ ...previous, [chat.id]: event.target.value }))
+                    }
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === 'Enter' &&
+                        !event.shiftKey &&
+                        !event.nativeEvent.isComposing
+                      ) {
+                        event.preventDefault();
+                        void send();
+                      }
+                    }}
+                  />
+                  <button
+                    className="send-button"
+                    aria-label="Отправить сообщение"
+                    disabled={sending || !draft.trim()}
+                  >
+                    {sending ? (
+                      <span className="spinner" />
+                    ) : (
+                      <Send size={23} fill="currentColor" strokeWidth={1.5} />
+                    )}
+                  </button>
+                </form>
+                <div className="composer-hint">
+                  <span className="desktop-hint">
+                    Enter — отправить · Shift + Enter — новая строка
+                  </span>
+                  <span className="mobile-hint">Только текст · до 4096 символов</span>
+                  {draft.length > 3500 && <span>{draft.length} / 4096</span>}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="welcome">
+              <div className="welcome-icon">
+                <Send size={48} strokeWidth={1.4} />
+              </div>
+              <span className="eyebrow">ВАШ TELEGRAM, МИНИМАЛИСТИЧНО</span>
+              <h1>
+                Разговор начинается
+                <br />с одного сообщения
+              </h1>
+              <p>
+                Создайте новый чат по номеру телефона
+                <br />
+                или выберите разговор слева.
+              </p>
+              <button
+                className="primary"
+                onClick={() => {
+                  setChatError('');
+                  setNewChat(true);
+                }}
+              >
+                <Plus size={19} />
+                Создать чат
+              </button>
+              <span className="welcome-note">
+                <ShieldCheck size={15} />
+                Чаты и черновики доступны до обновления вкладки
+              </span>
+            </div>
+          )}
+        </section>
+      </div>
       {newChat && (
         <Modal
           title="Новый чат"

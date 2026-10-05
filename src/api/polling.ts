@@ -19,7 +19,7 @@ export function pause(ms: number, signal: AbortSignal): Promise<void> {
 export async function pollNotifications(
   api: Pick<GreenApi, 'receive' | 'acknowledge'>,
   signal: AbortSignal,
-  onNotification: (body: Json) => void | false,
+  onNotification: (body: Json) => void | false | Promise<void | false>,
   onState: (state: PollState, message?: string) => void,
   wait = pause,
 ): Promise<void> {
@@ -37,7 +37,8 @@ export async function pollNotifications(
         ) {
           throw new ApiError('Некорректное уведомление GREEN-API.');
         }
-        const continuePolling = onNotification(record(notification.body));
+        const continuePolling = await onNotification(record(notification.body));
+        if (signal.aborted) break;
         await api.acknowledge(notification.receiptId, signal);
         if (continuePolling === false) return;
       }

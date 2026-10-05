@@ -105,9 +105,13 @@ export class GreenApi {
       throw new ApiError('GREEN-API вернул некорректный ответ.');
     }
   }
-  async connect(signal: AbortSignal): Promise<string[]> {
+  async getStateInstance(signal: AbortSignal): Promise<string> {
     const state = record(await this.request('getStateInstance', 'GET', signal));
-    if (state.stateInstance !== 'authorized')
+    if (!str(state.stateInstance)) throw new ApiError('GREEN-API не вернул состояние инстанса.');
+    return str(state.stateInstance);
+  }
+  async connect(signal: AbortSignal): Promise<string[]> {
+    if ((await this.getStateInstance(signal)) !== 'authorized')
       throw new ApiError(
         'Инстанс не авторизован. Подключите Telegram в личном кабинете GREEN-API.',
       );

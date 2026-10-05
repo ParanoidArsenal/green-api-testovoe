@@ -104,3 +104,15 @@ describe('GREEN-API Telegram client', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+it('handles malformed JSON and missing state in successful API responses', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockResolvedValueOnce(new Response('invalid JSON', { status: 200 }))
+      .mockResolvedValueOnce(Response.json({})),
+  );
+  const api = new GreenApi(credentials);
+  await expect(api.receive(signal())).rejects.toThrow('некорректный ответ');
+  await expect(api.getStateInstance(signal())).rejects.toThrow('состояние инстанса');
+});
