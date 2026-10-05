@@ -15,6 +15,9 @@ async function mockApi(
     holdSend?: Promise<void>;
     pollUnauthorized?: boolean;
     settingsDisabled?: boolean;
+    history?: object[];
+    failHistory?: boolean;
+    holdHistory?: Promise<void>;
   } = {},
 ) {
   const messenger = options.messenger ?? 'telegram';
@@ -22,6 +25,7 @@ async function mockApi(
   const queue: object[] = [];
   const sent: object[] = [];
   const deleted: number[] = [];
+  const historyRequests: { chatId: string; count: number }[] = [];
   let receipt = 1;
   let sendStarted = 0;
   await page.route('https://*.api.green-api.com/**', async (route) => {
@@ -49,6 +53,15 @@ async function mockApi(
         messenger === 'whatsapp'
           ? { existsWhatsapp: true, chatId: `${chatId}@lid` }
           : { exist: true, chatId };
+    } else if (url.pathname.includes('/getChatHistory/')) {
+      const body = route.request().postDataJSON();
+      historyRequests.push(body);
+      if (options.holdHistory) await options.holdHistory;
+      if (options.failHistory) {
+        await route.fulfill({ status: 500, json: {} });
+        return;
+      }
+      data = options.history ?? [];
     } else if (url.pathname.includes('/sendMessage/')) {
       sendStarted++;
       if (options.holdSend) await options.holdSend;
@@ -63,7 +76,7 @@ async function mockApi(
         await route.fulfill({ status: 401, json: {} });
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, queue.length ? 10 : 100));
       data = queue.length ? { receiptId: receipt, body: queue[0] } : null;
     } else if (url.pathname.includes('/deleteNotification/')) {
       const receiptId = Number(url.pathname.split('/').at(-1));
@@ -81,6 +94,7 @@ async function mockApi(
     queue,
     sent,
     deleted,
+    historyRequests,
     options,
     get sendStarted() {
       return sendStarted;
@@ -448,4 +462,418 @@ test('switching messenger resets credentials and rejects a mismatched instance',
   await page.getByLabel('apiTokenInstance', { exact: true }).fill('new-token');
   await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Нужен инстанс MAX');
+});
+
+for (const messenger of ['telegram', 'max', 'whatsapp'] as const) {
+  test(`${messenger}: restores history, searches and sends a quoted reply`, async ({
+    page,
+  }, testInfo) => {
+    const chatId = messenger === 'whatsapp' ? '12345678@lid' : '12345678';
+    const api = await mockApi(page, {
+      messenger,
+      history: [
+        {
+          type: 'incoming',
+          idMessage: 'history-1',
+          timestamp: 1763115112,
+          typeMessage: 'textMessage',
+          chatId,
+          textMessage: 'Обсудим проект завтра',
+        },
+        {
+          type: 'outgoing',
+          idMessage: 'history-2',
+          timestamp: 1763115113,
+          typeMessage: 'textMessage',
+          chatId,
+          textMessage: 'Проект готов к проверке',
+          statusMessage: 'read',
+        },
+      ],
+    });
+    await login(page, messenger);
+    await createChat(page);
+    await expect(page.getByRole('log')).toContainText('Обсудим проект завтра');
+    expect(api.historyRequests).toEqual([{ chatId, count: 100 }]);
+    await page.getByRole('button', { name: 'Обновить историю', exact: true }).click();
+    await expect.poll(() => api.historyRequests.length).toBe(2);
+    await expect(page.getByRole('log').locator('.bubble')).toHaveCount(2);
+    await page.getByRole('button', { name: 'Поиск по сообщениям', exact: true }).click();
+    const query = page.getByRole('textbox', { name: 'Текст для поиска' });
+    await expect(query).toBeFocused();
+    await query.fill('ПРОЕКТ');
+    await expect(page.locator('.search-count')).toHaveText('1 из 2');
+    await expect(page.getByRole('log').locator('mark')).toHaveCount(2);
+    await query.dispatchEvent('keydown', { key: 'Enter', isComposing: true });
+    await expect(page.locator('.search-count')).toHaveText('1 из 2');
+    await page.getByRole('button', { name: 'Следующее совпадение' }).click();
+    await expect(page.locator('.search-count')).toHaveText('2 из 2');
+    await expect(page.locator('.bubble.search-match')).toContainText('Проект готов');
+    await query.fill('отсутствующее');
+    await expect(page.locator('.search-count')).toHaveText('Не найдено');
+    await expect(page.getByRole('button', { name: 'Следующее совпадение' })).toBeDisabled();
+    await query.press('Escape');
+    await expect(query).not.toBeVisible();
+    await page
+      .getByRole('button', { name: 'Ответить на сообщение: Обсудим проект завтра', exact: true })
+      .click();
+    await expect(page.getByLabel('Цитируемое сообщение')).toContainText('Обсудим проект завтра');
+    await page.getByLabel('Сообщение', { exact: true }).fill('Давайте в 10:00');
+    await page.getByLabel('Сообщение', { exact: true }).press('Enter');
+    await expect(page.getByRole('log')).toContainText('Давайте в 10:00');
+    expect(api.sent).toEqual([
+      { chatId, message: 'Давайте в 10:00', quotedMessageId: 'history-1' },
+    ]);
+    await expect(page.getByLabel('Цитируемое сообщение')).not.toBeVisible();
+    await expect(page.locator('.quoted-message')).toContainText('Обсудим проект завтра');
+    await page.getByRole('button', { name: 'Загрузить больше', exact: true }).click();
+    await expect.poll(() => api.historyRequests.at(-1)?.count).toBe(500);
+    await expect(page.getByRole('log').locator('.bubble')).toHaveCount(3);
+    await page.screenshot({
+      path: testInfo.outputPath(`${messenger}-features.png`),
+      fullPage: true,
+    });
+    await page.reload();
+    await page.getByRole('combobox', { name: 'Мессенджер' }).selectOption(messenger);
+    await page.getByLabel('idInstance', { exact: true }).fill(providerFixtures[messenger].instance);
+    await page.getByLabel('apiTokenInstance', { exact: true }).fill('test-token');
+    await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
+    await createChat(page);
+    await expect(page.getByRole('log')).toContainText('Обсудим проект завтра');
+  });
+}
+test('history failure is recoverable and preserves a quote and draft after send failure', async ({
+  page,
+}) => {
+  const api = await mockApi(page, { failHistory: true, failSend: true });
+  await login(page);
+  await createChat(page);
+  await expect(page.getByRole('alert')).toContainText('Текущая переписка доступна');
+  api.options.failHistory = false;
+  api.options.history = [
+    {
+      type: 'incoming',
+      idMessage: 'history-1',
+      timestamp: 1763115112,
+      typeMessage: 'textMessage',
+      textMessage: 'Сохранить цитату',
+    },
+  ];
+  await page.getByRole('button', { name: 'Повторить загрузку истории' }).click();
+  await expect(page.getByRole('log')).toContainText('Сохранить цитату');
+  await page
+    .getByRole('button', { name: 'Ответить на сообщение: Сохранить цитату', exact: true })
+    .click();
+  await page.getByLabel('Сообщение', { exact: true }).fill('Ответ');
+  await page.getByLabel('Сообщение', { exact: true }).press('Enter');
+  await expect(page.getByRole('alert')).toContainText('Текст сохранен');
+  await expect(page.getByLabel('Цитируемое сообщение')).toContainText('Сохранить цитату');
+  await expect(page.getByLabel('Сообщение', { exact: true })).toHaveValue('Ответ');
+  await page.getByRole('button', { name: 'Отменить ответ' }).click();
+  await expect(page.getByLabel('Цитируемое сообщение')).not.toBeVisible();
+});
+
+type NotificationHarness = {
+  permissionRequests: number;
+  created: { title: string; body: string; tag: string }[];
+  closed: number;
+  background: boolean;
+  clickLast: () => void;
+};
+async function mockNotifications(page: Page, result: 'granted' | 'denied') {
+  await page.addInitScript((permissionResult) => {
+    const state = {
+      permissionRequests: 0,
+      created: [] as { title: string; body: string; tag: string }[],
+      closed: 0,
+      background: false,
+      clickLast: () => {},
+    };
+    class FakeNotification {
+      static permission = 'default';
+      onclick: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      static async requestPermission() {
+        state.permissionRequests++;
+        FakeNotification.permission = permissionResult;
+        return permissionResult;
+      }
+      constructor(title: string, options: { body: string; tag: string }) {
+        state.created.push({ title, ...options });
+        state.clickLast = () => this.onclick?.();
+      }
+      close() {
+        state.closed++;
+      }
+    }
+    Object.defineProperty(window, 'Notification', { configurable: true, value: FakeNotification });
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => (state.background ? 'hidden' : 'visible'),
+    });
+    document.hasFocus = () => !state.background;
+    window.focus = () => {
+      state.background = false;
+    };
+    (window as typeof window & { notificationTest: typeof state }).notificationTest = state;
+  }, result);
+}
+test('notifications require opt-in, ignore history and duplicates, open the chat and close on logout', async ({
+  page,
+}) => {
+  await mockNotifications(page, 'granted');
+  const api = await mockApi(page);
+  await login(page);
+  await createChat(page);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { notificationTest: NotificationHarness }).notificationTest
+          .permissionRequests,
+    ),
+  ).toBe(0);
+  await page.getByRole('button', { name: 'Включить уведомления', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Выключить уведомления', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true');
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { notificationTest: NotificationHarness }).notificationTest
+          .permissionRequests,
+    ),
+  ).toBe(1);
+  const incoming = (id: string) => ({
+    typeWebhook: 'incomingMessageReceived',
+    idMessage: id,
+    timestamp: Math.floor(Date.now() / 1000),
+    senderData: { chatId: '87654321', senderName: 'Борис', senderPhoneNumber: 79992223344 },
+    messageData: {
+      typeMessage: 'textMessage',
+      textMessageData: { textMessage: 'Пришел новый ответ' },
+    },
+  });
+  api.queue.push(incoming('visible'));
+  await expect.poll(() => api.deleted.length).toBe(1);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { notificationTest: NotificationHarness }).notificationTest
+          .created.length,
+    ),
+  ).toBe(0);
+  await page.evaluate(() => {
+    (
+      window as typeof window & { notificationTest: NotificationHarness }
+    ).notificationTest.background = true;
+  });
+  api.options.history = [
+    {
+      type: 'incoming',
+      idMessage: 'old-history',
+      timestamp: 1763115100,
+      typeMessage: 'textMessage',
+      textMessage: 'Ранее полученный текст',
+    },
+  ];
+  await page.getByRole('button', { name: 'Обновить историю', exact: true }).click();
+  await expect(page.getByRole('log')).toContainText('Ранее полученный текст');
+  api.queue.push(
+    { ...incoming('stale'), timestamp: 1763115100 },
+    incoming('background'),
+    incoming('background'),
+  );
+  await expect.poll(() => api.deleted.length).toBe(4);
+  const created = await page.evaluate(
+    () =>
+      (window as typeof window & { notificationTest: NotificationHarness }).notificationTest
+        .created,
+  );
+  expect(created).toHaveLength(1);
+  expect(created[0].title).toBe('Борис');
+  expect(created[0].body).toBe('Пришел новый ответ');
+  await page.evaluate(() => {
+    (
+      window as typeof window & { notificationTest: NotificationHarness }
+    ).notificationTest.clickLast();
+  });
+  await expect(page.getByRole('heading', { name: 'Борис', exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { notificationTest: NotificationHarness }).notificationTest
+            .closed,
+      ),
+    )
+    .toBe(1);
+  await page.evaluate(() => {
+    (
+      window as typeof window & { notificationTest: NotificationHarness }
+    ).notificationTest.background = true;
+  });
+  api.queue.push(incoming('logout'));
+  await expect.poll(() => api.deleted.length).toBe(5);
+  await page.getByRole('button', { name: 'Выйти', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Выйти', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { notificationTest: NotificationHarness }).notificationTest
+            .closed,
+      ),
+    )
+    .toBe(2);
+});
+test('denied notification permission explains how to enable it without breaking chat', async ({
+  page,
+}) => {
+  await mockNotifications(page, 'denied');
+  await mockApi(page);
+  await login(page);
+  await page.getByRole('button', { name: 'Включить уведомления', exact: true }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Уведомления заблокированы' }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Закрыть подсказку уведомлений' }).click();
+  await createChat(page);
+  await page.getByLabel('Сообщение', { exact: true }).fill('Можно продолжить');
+  await page.getByLabel('Сообщение', { exact: true }).press('Enter');
+  await expect(page.getByRole('log')).toContainText('Можно продолжить');
+});
+test('late history merges with a live response while preserving the active chat', async ({
+  page,
+}) => {
+  let releaseHistory!: () => void;
+  const holdHistory = new Promise<void>((resolve) => {
+    releaseHistory = resolve;
+  });
+  const api = await mockApi(page, {
+    holdHistory,
+    history: [
+      {
+        type: 'incoming',
+        idMessage: 'live-first',
+        timestamp: 1763115112,
+        typeMessage: 'textMessage',
+        textMessage: 'Ответ до истории',
+      },
+      {
+        type: 'incoming',
+        idMessage: 'older',
+        timestamp: 1763115100,
+        typeMessage: 'textMessage',
+        textMessage: 'Более раннее сообщение',
+      },
+    ],
+  });
+  await login(page);
+  await createChat(page);
+  api.queue.push({
+    typeWebhook: 'incomingMessageReceived',
+    idMessage: 'live-first',
+    timestamp: 1763115112,
+    senderData: { chatId: '12345678', senderName: 'Анна' },
+    messageData: {
+      typeMessage: 'textMessage',
+      textMessageData: { textMessage: 'Ответ до истории' },
+    },
+  });
+  await expect(page.getByRole('log')).toContainText('Ответ до истории');
+  releaseHistory();
+  await expect(page.getByRole('log')).toContainText('Более раннее сообщение');
+  await expect(page.getByRole('log').getByText('Ответ до истории', { exact: true })).toHaveCount(1);
+  await expect(page.locator('.chat-item')).toHaveCount(1);
+});
+
+test('history expansion preserves the visible message for older and newer additions', async ({
+  page,
+}) => {
+  const history = Array.from({ length: 35 }, (_, index) => ({
+    type: 'incoming',
+    idMessage: `anchor-${index}`,
+    timestamp: 1763115112 + index,
+    typeMessage: 'textMessage',
+    textMessage: `История ${index}\nСтрока два\nСтрока три`,
+  }));
+  const api = await mockApi(page, { history });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page);
+  await createChat(page);
+  await expect(page.getByRole('log')).toContainText('История 34');
+  await page.getByRole('log').evaluate((element) => {
+    element.scrollTop = 150;
+  });
+  await expect.poll(() => page.getByRole('log').evaluate((element) => element.scrollTop)).toBe(150);
+  const anchor = page
+    .getByRole('log')
+    .getByText('История 2\nСтрока два\nСтрока три', { exact: true });
+  const before = (await anchor.boundingBox())!.y;
+  api.options.history = [
+    {
+      type: 'incoming',
+      idMessage: 'much-older',
+      timestamp: 1763115000,
+      typeMessage: 'textMessage',
+      textMessage: 'Самое раннее сообщение',
+    },
+    ...history,
+    {
+      type: 'incoming',
+      idMessage: 'newer',
+      timestamp: 1763116000,
+      typeMessage: 'textMessage',
+      textMessage: 'Ответ из обновленной истории',
+    },
+  ];
+  await page.getByRole('button', { name: 'Обновить историю', exact: true }).click();
+  await expect(page.getByRole('log')).toContainText('Самое раннее сообщение');
+  await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThan(2);
+  const beforeAppend = (await anchor.boundingBox())!.y;
+  api.options.history.push({
+    type: 'incoming',
+    idMessage: 'newest',
+    timestamp: 1763116001,
+    typeMessage: 'textMessage',
+    textMessage: 'Только новое сообщение снизу',
+  });
+  await page.getByRole('button', { name: 'Обновить историю', exact: true }).click();
+  await expect(page.getByRole('log')).toContainText('Только новое сообщение снизу');
+  await expect
+    .poll(async () => Math.abs((await anchor.boundingBox())!.y - beforeAppend))
+    .toBeLessThan(2);
+});
+test('mobile search and quote controls stay accessible and cancellation restores focus', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, {
+    history: [
+      {
+        type: 'incoming',
+        idMessage: 'mobile-source',
+        timestamp: 1763115112,
+        typeMessage: 'textMessage',
+        textMessage: 'Проверка мобильного поиска',
+      },
+    ],
+  });
+  await login(page);
+  await createChat(page);
+  await expect(page.getByRole('log')).toContainText('Проверка мобильного поиска');
+  await page.getByRole('button', { name: 'Поиск по сообщениям', exact: true }).click();
+  await page.getByLabel('Текст для поиска').fill('мобильного');
+  await expect(page.locator('.search-count')).toHaveText('1 из 1');
+  await page.getByRole('button', { name: 'Закрыть поиск сообщений' }).click();
+  await page
+    .getByRole('button', { name: 'Ответить на сообщение: Проверка мобильного поиска', exact: true })
+    .click();
+  await expect(page.getByLabel('Сообщение', { exact: true })).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath('mobile-features.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole('button', { name: 'Отменить ответ' }).click();
+  await expect(page.getByLabel('Сообщение', { exact: true })).toBeFocused();
 });

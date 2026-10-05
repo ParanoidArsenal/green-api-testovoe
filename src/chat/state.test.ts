@@ -170,3 +170,105 @@ it('merges phone and LID chats already created by incoming notifications', () =>
     }).chats,
   ).toHaveLength(1);
 });
+
+it('merges history with live messages without duplicating messages or unread counts', () => {
+  const live = chatReducer(initialState, { type: 'event', event: incoming() });
+  const loaded = chatReducer(live, {
+    type: 'history',
+    chatId: '123',
+    messages: [message(), { ...message('older'), timestamp: 1763115012000 }],
+  });
+  expect(loaded.chats[0].messages.map((item) => item.id)).toEqual(['older', 'm1']);
+  expect(loaded.chats[0].unread).toBe(1);
+  expect(chatReducer(loaded, { type: 'history', chatId: 'unknown', messages: [message()] })).toBe(
+    loaded,
+  );
+});
+it('keeps advanced statuses and quote details when stale history arrives', () => {
+  const sent = chatReducer(initialState, {
+    type: 'sent',
+    chatId: '123',
+    message: {
+      ...message('sent', true, 'read'),
+      quote: { id: 'original', text: 'Локальная цитата' },
+    },
+  });
+  const loaded = chatReducer(sent, {
+    type: 'history',
+    chatId: '123',
+    messages: [message('sent', true, 'sent')],
+  });
+  expect(loaded.chats[0].messages[0].status).toBe('read');
+  expect(loaded.chats[0].messages[0].quote?.text).toBe('Локальная цитата');
+});
+it('applies early alias statuses to a history message without marking history unread', () => {
+  const early = chatReducer(initialState, {
+    type: 'event',
+    event: {
+      type: 'delivery',
+      chatId: '79991234567@c.us',
+      messageId: 'sent',
+      status: 'read',
+    },
+  });
+  const opened = chatReducer(early, {
+    type: 'open',
+    id: '123@lid',
+    phone: '79991234567',
+    name: 'Анна',
+    aliases: ['79991234567@c.us'],
+  });
+  const loaded = chatReducer(opened, {
+    type: 'history',
+    chatId: '79991234567@c.us',
+    messages: [message('sent', true, 'queued')],
+  });
+  expect(loaded.chats).toHaveLength(1);
+  expect(loaded.chats[0].messages[0].status).toBe('read');
+  expect(loaded.chats[0].unread).toBe(0);
+});
+
+it('preserves a local reply quote when the outgoing echo beats the send response', () => {
+  const echo = chatReducer(initialState, {
+    type: 'event',
+    event: {
+      type: 'message',
+      chatId: '123',
+      message: message('sent', true, 'sent'),
+    },
+  });
+  const local = chatReducer(echo, {
+    type: 'sent',
+    chatId: '123',
+    message: {
+      ...message('sent', true, 'queued'),
+      quote: { id: 'original', text: 'Исходный текст', outgoing: false },
+    },
+  });
+  expect(local.chats[0].messages).toHaveLength(1);
+  expect(local.chats[0].messages[0].status).toBe('sent');
+  expect(local.chats[0].messages[0].quote?.text).toBe('Исходный текст');
+});
+it('fills a partial webhook quote from history without losing live data', () => {
+  const live = chatReducer(initialState, {
+    type: 'event',
+    event: {
+      type: 'message',
+      chatId: '123',
+      message: { ...message(), quote: { id: 'original', text: '' } },
+    },
+  });
+  const loaded = chatReducer(live, {
+    type: 'history',
+    chatId: '123',
+    messages: [
+      { ...message(), quote: { id: 'original', text: 'Текст из истории', outgoing: true } },
+    ],
+  });
+  expect(loaded.chats[0].messages[0].quote).toEqual({
+    id: 'original',
+    text: 'Текст из истории',
+    outgoing: true,
+  });
+  expect(loaded.chats[0].unread).toBe(1);
+});

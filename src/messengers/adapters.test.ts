@@ -23,6 +23,130 @@ const incoming = (id: MessengerId, outgoing = false): Json => ({
 });
 afterEach(() => vi.unstubAllGlobals());
 describe.each(['telegram', 'max', 'whatsapp'] as const)('%s adapter', (id) => {
+  it('sends quoted replies using the provider quote ID without adding it to ordinary messages', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ idMessage: 'reply' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const api = createMessengerAdapter(id, credentials);
+    await api.sendMessage('123', 'Ответ', signal(), 'original');
+    await api.sendMessage('123', 'Обычный текст', signal());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      chatId: '123',
+      message: 'Ответ',
+      quotedMessageId: 'original',
+    });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).not.toHaveProperty('quotedMessageId');
+  });
+  it('loads flat text history, extended text and quotes chronologically, excluding media and deletions', async () => {
+    const entry = (idMessage: string, timestamp: number, extra: Json = {}) => ({
+      type: 'incoming',
+      idMessage,
+      timestamp,
+      chatId: '123',
+      typeMessage: 'textMessage',
+      textMessage: idMessage,
+      ...extra,
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json([
+        entry('reply', 104, {
+          type: 'outgoing',
+          statusMessage: 'read',
+          typeMessage: 'quotedMessage',
+          textMessage: undefined,
+          extendedTextMessage: { text: 'Ответ', stanzaId: 'original' },
+          quotedMessage: { stanzaId: 'original' },
+        }),
+        entry('link', 103, {
+          typeMessage: 'extendedTextMessage',
+          textMessage: undefined,
+          extendedTextMessage: { text: 'https://example.com' },
+        }),
+        entry('original', 102),
+        entry('photo', 101, { typeMessage: 'imageMessage', caption: 'Медиа' }),
+        entry('deleted', 100, { isDeleted: true }),
+        entry('removed-original', 99),
+        entry('delete-event', 105, {
+          typeMessage: 'deletedMessage',
+          deletedMessageId: 'removed-original',
+        }),
+        entry('bad-date', -1),
+        entry('original', 102),
+      ]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const messages = await createMessengerAdapter(id, credentials).getChatHistory(
+      '123',
+      100,
+      signal(),
+    );
+    expect(fetchMock.mock.calls[0][0]).toContain('/getChatHistory/test-token');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ chatId: '123', count: 100 });
+    expect(messages.map((message) => message.id)).toEqual(['original', 'link', 'reply']);
+    expect(messages[2]).toMatchObject({
+      outgoing: true,
+      status: 'read',
+      text: 'Ответ',
+      quote: { id: 'original', text: 'original', outgoing: false },
+    });
+    expect(messages[0].status).toBeUndefined();
+  });
+  it('rejects malformed history and invalid counts while normalizing pending and failed statuses', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ messages: [] }))
+      .mockResolvedValueOnce(
+        Response.json(
+          ['pending', 'yellowCard', 'noAccount', 'delivered'].map((statusMessage, index) => ({
+            type: 'outgoing',
+            idMessage: String(index),
+            timestamp: index + 1,
+            typeMessage: 'textMessage',
+            textMessage: 'Text',
+            statusMessage,
+          })),
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const api = createMessengerAdapter(id, credentials);
+    for (const count of [0, -1, 1.5, NaN, Infinity, 5001, Number.MAX_SAFE_INTEGER + 1])
+      await expect(api.getChatHistory('123', count, signal())).rejects.toThrow('от 1 до 5000');
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(api.getChatHistory('123', 100, signal())).rejects.toThrow('некорректную историю');
+    const messages = await api.getChatHistory('123', 5000, signal());
+    expect(messages.map((message) => message.status)).toEqual([
+      'queued',
+      'queued',
+      'failed',
+      'delivered',
+    ]);
+  });
+  it('preserves quote references with and without embedded text in notifications', () => {
+    const api = createMessengerAdapter(id, credentials);
+    const body = incoming(id);
+    expect(
+      api.decodeNotification({
+        ...body,
+        messageData: {
+          ...(body.messageData as Json),
+          quotedMessage: { stanzaId: 'original', participant: '123' },
+        },
+      }),
+    ).toMatchObject({ message: { quote: { id: 'original', text: '' } } });
+    expect(
+      api.decodeNotification({
+        ...body,
+        messageData: {
+          typeMessage: 'quotedMessage',
+          extendedTextMessageData: { text: 'Ответ', stanzaId: 'original' },
+          quotedMessage: {
+            stanzaId: 'original',
+            typeMessage: 'textMessage',
+            textMessage: 'Цитата',
+          },
+        },
+      }),
+    ).toMatchObject({ message: { text: 'Ответ', quote: { id: 'original', text: 'Цитата' } } });
+  });
   it('checks authorization and compatible instance settings', async () => {
     const settings =
       id === 'whatsapp'

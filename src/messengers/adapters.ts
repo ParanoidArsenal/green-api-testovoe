@@ -7,7 +7,7 @@ import {
   type Credentials,
   type Json,
 } from '../api/green-api';
-import type { ChatEvent, MessageStatus } from '../chat/events';
+import type { ChatEvent, Message, MessageStatus } from '../chat/events';
 import type { MessengerAdapter, MessengerId, MessengerInfo, Recipient } from './types';
 
 export const messengerInfo: Record<MessengerId, MessengerInfo> = {
@@ -44,6 +44,42 @@ export const messengerInfo: Record<MessengerId, MessengerInfo> = {
 };
 export const messengers = Object.values(messengerInfo);
 const deliveryStatuses: MessageStatus[] = ['queued', 'sent', 'delivered', 'read', 'failed'];
+const textTypes = ['textMessage', 'extendedTextMessage', 'quotedMessage'];
+function messageText(data: Json): string {
+  if (!textTypes.includes(str(data.typeMessage))) return '';
+  return (
+    str(data.textMessage) ||
+    str(record(data.textMessageData).textMessage) ||
+    str(record(data.extendedTextMessage).text) ||
+    str(record(data.extendedTextMessageData).text)
+  );
+}
+function messageQuote(data: Json): Message['quote'] {
+  const quoted = record(data.quotedMessage);
+  const extended = record(data.extendedTextMessageData ?? data.extendedTextMessage);
+  const id = str(quoted.stanzaId) || str(extended.stanzaId) || str(data.quotedMessageId);
+  if (!id) return undefined;
+  return {
+    id,
+    text:
+      quoted.isDeleted === true
+        ? ''
+        : messageText(quoted) || (!quoted.typeMessage ? str(quoted.textMessage) : ''),
+    ...(quoted.type === 'outgoing'
+      ? { outgoing: true }
+      : quoted.type === 'incoming'
+        ? { outgoing: false }
+        : {}),
+  };
+}
+function validTimestamp(timestamp: unknown): timestamp is number {
+  return (
+    typeof timestamp === 'number' &&
+    Number.isFinite(timestamp) &&
+    timestamp > 0 &&
+    Number.isFinite(new Date(timestamp * 1000).getTime())
+  );
+}
 
 abstract class GreenApiAdapter implements MessengerAdapter {
   protected readonly client: GreenApiClient;
@@ -88,11 +124,85 @@ abstract class GreenApiAdapter implements MessengerAdapter {
     return warnings;
   }
   abstract resolvePhone(phone: string, signal: AbortSignal): Promise<Recipient>;
-  async sendMessage(chatId: string, text: string, signal: AbortSignal): Promise<string> {
+  async getChatHistory(chatId: string, count: number, signal: AbortSignal): Promise<Message[]> {
+    // An application cap bounds response size; MAX exposes at most 5000 messages / 3 months.
+    if (!Number.isSafeInteger(count) || count < 1 || count > 5000)
+      throw new Error('Количество сообщений истории должно быть целым числом от 1 до 5000.');
+    const data = await this.client.request('getChatHistory', 'POST', signal, { chatId, count });
+    if (!Array.isArray(data)) throw new ApiError('GREEN-API вернул некорректную историю чата.');
+    const messages = new Map<string, Message>();
+    const deletedIds = new Set(
+      data
+        .flatMap((value) => {
+          const item = record(value);
+          return [str(item.deletedMessageId), item.isDeleted === true ? str(item.idMessage) : ''];
+        })
+        .filter(Boolean),
+    );
+    for (const value of data) {
+      const item = record(value);
+      const id = str(item.idMessage);
+      const text = messageText(item);
+      if (
+        !id ||
+        !text ||
+        !['incoming', 'outgoing'].includes(str(item.type)) ||
+        !validTimestamp(item.timestamp) ||
+        item.isDeleted === true ||
+        str(item.deletedMessageId) ||
+        deletedIds.has(id)
+      )
+        continue;
+      const outgoing = item.type === 'outgoing';
+      const rawStatus = str(item.statusMessage);
+      const status = ['pending', 'yellowCard'].includes(rawStatus)
+        ? 'queued'
+        : rawStatus === 'noAccount'
+          ? 'failed'
+          : deliveryStatuses.includes(rawStatus as MessageStatus)
+            ? (rawStatus as MessageStatus)
+            : 'sent';
+      const quote = messageQuote(item);
+      if (!messages.has(id))
+        messages.set(id, {
+          id,
+          text,
+          timestamp: item.timestamp * 1000,
+          outgoing,
+          status: outgoing ? status : undefined,
+          ...(quote ? { quote } : {}),
+        });
+    }
+    return [...messages.values()]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((message) => {
+        const original = message.quote && messages.get(message.quote.id);
+        return original && message.quote
+          ? {
+              ...message,
+              quote: {
+                ...message.quote,
+                text: message.quote.text || original.text,
+                outgoing: original.outgoing,
+              },
+            }
+          : message;
+      });
+  }
+  async sendMessage(
+    chatId: string,
+    text: string,
+    signal: AbortSignal,
+    quotedMessageId?: string,
+  ): Promise<string> {
     if (!text.trim() || text.length > this.info.maxTextLength)
       throw new Error(`Введите текст длиной от 1 до ${this.info.maxTextLength} символов.`);
     const data = record(
-      await this.client.request('sendMessage', 'POST', signal, { chatId, message: text }),
+      await this.client.request('sendMessage', 'POST', signal, {
+        chatId,
+        message: text,
+        ...(quotedMessageId ? { quotedMessageId } : {}),
+      }),
     );
     if (!str(data.idMessage))
       throw new ApiError(
@@ -159,25 +269,12 @@ abstract class GreenApiAdapter implements MessengerAdapter {
       return null;
     const sender = record(body.senderData);
     const data = record(body.messageData);
-    const text =
-      data.typeMessage === 'textMessage'
-        ? str(record(data.textMessageData).textMessage)
-        : ['extendedTextMessage', 'quotedMessage'].includes(str(data.typeMessage))
-          ? str(record(data.extendedTextMessageData).text)
-          : '';
+    const text = messageText(data);
     const chatId = str(sender.chatId);
     const timestamp = body.timestamp;
-    if (
-      !id ||
-      !chatId ||
-      !text ||
-      typeof timestamp !== 'number' ||
-      !Number.isFinite(timestamp) ||
-      timestamp <= 0 ||
-      !Number.isFinite(new Date(timestamp * 1000).getTime())
-    )
-      return null;
+    if (!id || !chatId || !text || !validTimestamp(timestamp)) return null;
     const outgoing = type !== 'incomingMessageReceived';
+    const quote = messageQuote(data);
     return {
       type: 'message',
       chatId,
@@ -192,6 +289,7 @@ abstract class GreenApiAdapter implements MessengerAdapter {
         timestamp: timestamp * 1000,
         outgoing,
         status: outgoing ? 'sent' : undefined,
+        ...(quote ? { quote } : {}),
       },
     };
   }

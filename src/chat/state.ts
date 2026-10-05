@@ -24,6 +24,7 @@ export type Action =
   | { type: 'open'; id: string; name: string; phone: string; aliases?: string[] }
   | { type: 'select'; id: string | null }
   | { type: 'sent'; chatId: string; message: Message }
+  | { type: 'history'; chatId: string; messages: Message[] }
   | { type: 'event'; event: ChatEvent }
   | { type: 'dismissDeliveryError' };
 const statuses: MessageStatus[] = ['queued', 'sent', 'delivered', 'read', 'failed'];
@@ -33,6 +34,15 @@ function mergeStatus(current: MessageStatus | undefined, next: MessageStatus): M
 }
 function matches(chat: Chat, id: string) {
   return chat.id === id || chat.aliases.includes(id);
+}
+function mergeQuote(existing: Message['quote'], next: Message['quote']): Message['quote'] {
+  if (!existing) return next;
+  if (!next || existing.id !== next.id) return existing;
+  const text = existing.text || next.text;
+  const outgoing = existing.outgoing ?? next.outgoing;
+  return text === existing.text && outgoing === existing.outgoing
+    ? existing
+    : { ...existing, text, outgoing };
 }
 function sortMessages(messages: Message[]) {
   return messages.sort((a, b) => Math.floor(a.timestamp / 1000) - Math.floor(b.timestamp / 1000));
@@ -70,14 +80,12 @@ function addMessage(
   }
   const existing = chat.messages.find((item) => item.id === message.id);
   if (existing) {
-    if (!message.outgoing || !existing.outgoing || !message.status) return state;
-    const status = knownStatus(
-      state,
-      chat,
-      message.id,
-      mergeStatus(existing.status, message.status),
-    );
-    if (status === existing.status) return state;
+    const status =
+      message.outgoing && existing.outgoing && message.status
+        ? knownStatus(state, chat, message.id, mergeStatus(existing.status, message.status))
+        : existing.status;
+    const quote = mergeQuote(existing.quote, message.quote);
+    if (status === existing.status && quote === existing.quote) return state;
     return {
       ...state,
       chats: chats.map((item) =>
@@ -86,7 +94,7 @@ function addMessage(
           : {
               ...item,
               messages: item.messages.map((value) =>
-                value.id === message.id ? { ...value, status } : value,
+                value.id === message.id ? { ...value, status, quote } : value,
               ),
             },
       ),
@@ -111,6 +119,29 @@ function addMessage(
   };
 }
 export function chatReducer(state: ChatState, action: Action): ChatState {
+  if (action.type === 'history') {
+    const chat = state.chats.find((item) => matches(item, action.chatId));
+    if (!chat) return state;
+    const merged = new Map(chat.messages.map((message) => [message.id, message]));
+    for (const message of action.messages) {
+      const existing = merged.get(message.id);
+      const status = message.status
+        ? mergeStatus(existing?.status, message.status)
+        : existing?.status;
+      merged.set(message.id, {
+        ...message,
+        ...existing,
+        status: knownStatus(state, chat, message.id, status),
+        quote: mergeQuote(existing?.quote, message.quote),
+      });
+    }
+    return {
+      ...state,
+      chats: state.chats.map((item) =>
+        item.id === chat.id ? { ...item, messages: sortMessages([...merged.values()]) } : item,
+      ),
+    };
+  }
   if (action.type === 'dismissDeliveryError') return { ...state, deliveryError: null };
   if (action.type === 'select')
     return {

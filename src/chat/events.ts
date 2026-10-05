@@ -5,6 +5,7 @@ export interface Message {
   timestamp: number;
   outgoing: boolean;
   status?: MessageStatus;
+  quote?: { id: string; text: string; outgoing?: boolean };
 }
 // Domain events contain no GREEN-API webhook fields or messenger-specific payloads.
 export type ChatEvent =

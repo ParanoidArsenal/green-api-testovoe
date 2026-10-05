@@ -1,5 +1,5 @@
 import type { Credentials, Json } from '../api/green-api';
-import type { ChatEvent } from '../chat/events';
+import type { ChatEvent, Message } from '../chat/events';
 export type MessengerId = 'telegram' | 'max' | 'whatsapp';
 export interface MessengerInfo {
   id: MessengerId;
@@ -22,7 +22,13 @@ export interface MessengerAdapter {
   connect(signal: AbortSignal): Promise<string[]>;
   getStateInstance(signal: AbortSignal): Promise<string>;
   resolvePhone(phone: string, signal: AbortSignal): Promise<Recipient>;
-  sendMessage(chatId: string, text: string, signal: AbortSignal): Promise<string>;
+  getChatHistory(chatId: string, count: number, signal: AbortSignal): Promise<Message[]>;
+  sendMessage(
+    chatId: string,
+    text: string,
+    signal: AbortSignal,
+    quotedMessageId?: string,
+  ): Promise<string>;
   receive(signal: AbortSignal): Promise<unknown>;
   acknowledge(receiptId: number, signal: AbortSignal): Promise<void>;
   decodeNotification(body: Json): ChatEvent | null;
