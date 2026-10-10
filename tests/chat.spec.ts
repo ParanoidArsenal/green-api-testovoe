@@ -461,7 +461,7 @@ test('switching messenger resets credentials and rejects a mismatched instance',
     'type',
     'password',
   );
-  await expect(page).toHaveTitle('MAX — GREEN-API Chat');
+  await expect(page).toHaveTitle('Линия · MAX — GREEN-API');
   await page.getByLabel('idInstance', { exact: true }).fill('3100000000');
   await page.getByLabel('apiTokenInstance', { exact: true }).fill('new-token');
   await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
@@ -987,6 +987,9 @@ test('captures desktop, mobile, search and login presentation screens', async ({
     .getByRole('button', { name: 'Ответить на сообщение: Отлично, до встречи!', exact: true })
     .click();
   await expect(page.getByLabel('Цитируемое сообщение')).toBeVisible();
+  await page.getByRole('log').evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
   await page.screenshot({ path: testInfo.outputPath('chat-mobile.png'), fullPage: true });
   await page.getByLabel('Действия чата', { exact: true }).click();
   await expect(

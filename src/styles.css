@@ -1,19 +1,14 @@
 :root {
-  font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
-  color: #243541;
-  background: #f5f7f9;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #302a2d;
+  background: #faf7f3;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   font-weight: 400;
-  --blue: #1677af;
-  --muted: #596b78;
-  --border: #e8edf1;
+  --accent: #7b3f50;
+  --muted: #645960;
+  --border: #e5dcd6;
 }
 * {
   box-sizing: border-box;
@@ -46,11 +41,11 @@ button {
 button:focus-visible,
 a:focus-visible,
 summary:focus-visible {
-  outline: 3px solid var(--blue);
+  outline: 3px solid var(--accent);
   outline-offset: 3px;
 }
 a {
-  color: var(--blue);
+  color: var(--accent);
   text-decoration: none;
 }
 a:hover {
@@ -67,18 +62,18 @@ textarea {
 }
 input:focus,
 textarea:focus {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 3px #2488c512;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px #7b3f5012;
 }
 input:disabled {
-  background: #f5f7f9;
+  background: #faf7f3;
 }
 input {
   width: 100%;
-  border: 1px solid #dce3e8;
+  border: 1px solid #ded3ce;
   border-radius: 10px;
   padding: 14px 15px;
-  color: #243541;
+  color: #302a2d;
   background: white;
   transition: border-color 0.15s;
 }
@@ -107,22 +102,45 @@ form > label:first-child {
 }
 .brand-divider {
   font-weight: 400;
-  color: #b4c0c9;
+  color: #c7b6be;
   padding: 0 9px;
 }
 .logo {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 16px;
+  flex-direction: column;
+  gap: 6px;
   width: 84px;
   height: 84px;
   color: white;
-  background: #2488c5;
+  background: #7b3f50;
   flex-shrink: 0;
 }
-.logo svg {
-  margin-left: -3px;
+.logo-line {
+  display: block;
+  width: 22px;
+  height: 5px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.logo-line:first-child {
+  transform: translateX(-4px);
+}
+.logo-line:last-child {
+  transform: translateX(4px);
+}
+.wordmark,
+.landing-header .brand > span {
+  font-family: Georgia, serif;
+  font-size: 23px;
+  letter-spacing: -0.5px;
+}
+.landing-header .muted {
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  letter-spacing: 0;
 }
 .logo.small {
   width: 42px;
@@ -141,21 +159,21 @@ form > label:first-child {
   transition: background 0.15s;
 }
 .primary {
-  background: var(--blue);
+  background: var(--accent);
   color: white;
 }
 .primary:hover:enabled {
-  background: #1c77ae;
+  background: #623040;
 }
 .secondary {
-  background: #eff3f6;
-  color: #476276;
+  background: #eee5de;
+  color: #65535c;
 }
 .icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #82919c;
+  color: #7c6b73;
   background: transparent;
   min-width: 38px;
   min-height: 38px;
@@ -163,13 +181,13 @@ form > label:first-child {
   flex-shrink: 0;
 }
 .icon-button:hover {
-  background: #edf2f6;
+  background: #eee5de;
 }
 .login-page {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: #f4f6f8;
+  background: #f8f4ef;
   padding: 0 6%;
 }
 .landing-header {
@@ -186,18 +204,19 @@ form > label:first-child {
 }
 .login-card {
   background: #fff;
-  border: 1px solid #e7edf1;
+  border: 1px solid #e5dcd6;
   border-radius: 16px;
   padding: 28px 36px 24px;
   box-shadow: 0 4px 20px #30445a05;
   width: 100%;
   max-width: 448px;
   margin: 14px auto;
-  text-align: center;
+  text-align: left;
 }
 .login-card h1 {
-  font-size: 27px;
-  font-weight: 650;
+  font-family: Georgia, serif;
+  font-size: 30px;
+  font-weight: 400;
   letter-spacing: -0.8px;
 }
 .intro {
@@ -346,10 +365,10 @@ details label {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: #f1f4f6;
+  background: #ebe4de;
   border-radius: 10px;
   padding: 0 13px;
-  color: #98a4ae;
+  color: #897d81;
 }
 .search-input input {
   border: 0;
@@ -364,17 +383,17 @@ details label {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  border: 1px solid #d9e9f3;
+  border: 1px solid #7b3f50;
   border-radius: 10px;
   padding: 11px;
-  background: #f2f9fd;
-  color: var(--blue);
+  background: #7b3f50;
+  color: white;
   font-size: 13px;
   font-weight: 600;
   margin-top: 12px;
 }
 .new-chat-button:hover {
-  background: #eaf5fb;
+  background: #623040;
 }
 .chat-list {
   overflow-y: auto;
@@ -393,10 +412,11 @@ details label {
   color: inherit;
 }
 .chat-item:hover {
-  background: #f4f7fa;
+  background: #efe7e1;
 }
 .chat-item.selected {
-  background: #eaf4fb;
+  background: #e9ddd7;
+  box-shadow: inset 3px 0 var(--accent);
 }
 .avatar {
   display: flex;
@@ -404,9 +424,9 @@ details label {
   justify-content: center;
   width: 47px;
   height: 47px;
-  border-radius: 50%;
-  background: #38778d;
-  color: white;
+  border-radius: 15px;
+  background: #eadbd0;
+  color: #714f40;
   flex-shrink: 0;
   font-size: 16px;
   font-weight: 600;
@@ -446,7 +466,7 @@ details label {
 }
 .unread {
   color: white;
-  background: var(--blue);
+  background: var(--accent);
   min-width: 19px;
   height: 19px;
   padding: 2px 5px;
@@ -505,7 +525,7 @@ details label {
 }
 .connection button {
   font-size: 12px;
-  color: var(--blue);
+  color: var(--accent);
   background: transparent;
   padding: 0;
   margin-left: auto;
@@ -515,7 +535,7 @@ details label {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: #eaf0ec;
+  background: #faf7f3;
 }
 .welcome {
   display: flex;
@@ -525,18 +545,18 @@ details label {
   flex-direction: column;
   text-align: center;
   padding: 35px;
-  background: #f1f5f7;
+  background: #faf7f3;
 }
 .welcome-icon {
   width: 88px;
   height: 88px;
-  border: 1px solid #dbe7ee;
-  background: #f7fafbbb;
+  border: 1px solid #e5dcd6;
+  background: #f3ebe5;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #4997c5;
+  color: #7b3f50;
   margin-bottom: 16px;
 }
 .welcome h1 {
@@ -545,7 +565,7 @@ details label {
   font-weight: 600;
   letter-spacing: -0.4px;
   margin-top: 18px;
-  color: #37576b;
+  color: #46373d;
 }
 .welcome > p {
   color: var(--muted);
@@ -568,7 +588,7 @@ details label {
   align-items: center;
   gap: 13px;
   padding: 15px 29px;
-  border-bottom: 1px solid #e3e9ed;
+  border-bottom: 1px solid #e5dcd6;
 }
 .header-avatar {
   width: 43px;
@@ -609,15 +629,16 @@ details label {
   margin: 6px 0 24px;
 }
 .date-separator span {
-  background: #d5e2d9;
-  color: #4b6254;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: #645960;
   font-size: 11px;
   border-radius: 20px;
   padding: 6px 12px;
 }
 .message-row {
   display: flex;
-  margin-bottom: 9px;
+  margin-bottom: 14px;
 }
 .message-row.outgoing {
   justify-content: flex-end;
@@ -626,13 +647,16 @@ details label {
   max-width: min(78%, 550px);
   padding: 11px 13px 7px;
   background: #fff;
-  border-radius: 12px 12px 12px 3px;
+  border-radius: 4px 16px 16px 16px;
+  border: 1px solid var(--border);
   box-shadow: 0 1px 2px #27402c0a;
   min-width: 85px;
 }
 .outgoing .bubble {
-  background: #dff2da;
-  border-radius: 12px 12px 3px 12px;
+  background: #7b3f50;
+  border-radius: 16px 4px 16px 16px;
+  color: white;
+  border-color: transparent;
 }
 .bubble p {
   font-size: 14px;
@@ -647,17 +671,17 @@ details label {
   gap: 5px;
   margin-top: 4px;
   font-size: 11px;
-  color: #546958;
+  color: #645960;
 }
 .incoming .message-meta {
   color: var(--muted);
 }
 .delivery {
   display: flex;
-  color: #527847;
+  color: #7b3f50;
 }
 .delivery.read {
-  color: #1677af;
+  color: #7b3f50;
 }
 .delivery.failed,
 .bubble.failed .message-meta {
@@ -673,14 +697,14 @@ details label {
   text-align: center;
   margin: auto;
   padding: 40px 10px;
-  color: #546958;
+  color: #645960;
 }
 .chat-start strong {
   display: block;
   font-size: 15px;
   font-weight: 500;
   margin-top: 14px;
-  color: #4b6254;
+  color: #645960;
 }
 .chat-start p {
   font-size: 12px;
@@ -709,8 +733,8 @@ details label {
   min-height: 54px;
   field-sizing: content;
   background: white;
-  border: 1px solid transparent;
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   padding: 16px 18px;
   line-height: 1.5;
   font-size: 14px;
@@ -718,17 +742,17 @@ details label {
 .send-button {
   width: 52px;
   height: 52px;
-  border-radius: 50%;
+  border-radius: 12px;
   display: flex;
   justify-content: center;
   align-items: center;
-  background: var(--blue);
+  background: var(--accent);
   color: white;
   flex-shrink: 0;
   margin-bottom: 1px;
 }
 .send-button:hover:enabled {
-  background: #1c77ae;
+  background: #623040;
 }
 .send-button svg {
   margin-left: -2px;
@@ -738,7 +762,7 @@ details label {
   justify-content: space-between;
   max-width: 800px;
   margin: 9px auto 0;
-  color: #546958;
+  color: #645960;
   font-size: 12px;
   padding-left: 2px;
 }
@@ -774,7 +798,7 @@ dialog {
   box-shadow: 0 20px 70px #12304420;
   width: calc(100% - 36px);
   max-width: 420px;
-  color: #243541;
+  color: #302a2d;
 }
 dialog::backdrop {
   background: #12304455;
@@ -964,7 +988,7 @@ dialog::backdrop {
   min-height: 0;
 }
 .search-input:focus-within {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .poll-error {
@@ -1046,18 +1070,18 @@ dialog::backdrop {
 select {
   font: inherit;
   width: 100%;
-  border: 1px solid #dce3e8;
+  border: 1px solid #ded3ce;
   border-radius: 10px;
   padding: 14px 15px;
-  color: #243541;
+  color: #302a2d;
   background: white;
 }
 select:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 select:disabled {
-  background: #f5f7f9;
+  background: #faf7f3;
 }
 @media (max-width: 600px) {
   select {
@@ -1088,14 +1112,14 @@ select:disabled {
   padding: 9px 16px;
   background: #f7faf8;
   border-bottom: 1px solid #dce6df;
-  color: #546958;
+  color: #645960;
   font-size: 12px;
 }
 .history-button {
   display: inline-flex;
   gap: 5px;
   align-items: center;
-  color: #176b9b;
+  color: #7b3f50;
   background: transparent;
   font-size: 12px;
   padding: 4px 0;
@@ -1132,11 +1156,11 @@ select:disabled {
 }
 mark {
   background: #ffe79a;
-  color: #243541;
+  color: #302a2d;
   border-radius: 2px;
 }
 .bubble.search-match {
-  outline: 2px solid #2488c5;
+  outline: 2px solid #7b3f50;
   outline-offset: 2px;
 }
 .reply-button {
@@ -1150,7 +1174,7 @@ mark {
   margin: 0 5px;
   border-radius: 50%;
   background: #ffffffa6;
-  color: #476e85;
+  color: #7b3f50;
   opacity: 0;
 }
 .outgoing .reply-button {
@@ -1170,8 +1194,8 @@ mark {
   padding: 10px 12px;
   background: white;
   border-radius: 10px;
-  border-left: 3px solid var(--blue);
-  color: #176b9b;
+  border-left: 3px solid var(--accent);
+  color: #7b3f50;
 }
 .reply-preview > div {
   flex: 1;
@@ -1183,7 +1207,7 @@ mark {
 .reply-preview p {
   margin-top: 4px;
   font-size: 13px;
-  color: #526b61;
+  color: #645960;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1194,13 +1218,13 @@ mark {
   align-items: flex-start;
   text-align: left;
   gap: 4px;
-  background: #2188c510;
-  border-left: 3px solid #2488c5;
+  background: #7b3f5010;
+  border-left: 3px solid #7b3f50;
   border-radius: 4px;
   padding: 7px 9px;
   margin-bottom: 8px;
   width: 100%;
-  color: #176b9b;
+  color: #7b3f50;
 }
 .quoted-message strong {
   font-size: 11px;
@@ -1293,12 +1317,12 @@ mark {
   padding: 10px 12px;
   border-radius: 7px;
   background: transparent;
-  color: #334d60;
+  color: #403539;
   text-align: left;
   font-size: 13px;
 }
 .chat-tool-item:hover {
-  background: #f0f5f8;
+  background: #f3ebe5;
 }
 .chat-tool-item.mobile-notifications {
   display: none;
@@ -1327,4 +1351,26 @@ mark {
   .history-button {
     min-height: 44px;
   }
+}
+
+.outgoing .message-meta,
+.outgoing .delivery,
+.outgoing .delivery.read {
+  color: #eddae0;
+}
+.outgoing .quoted-message {
+  background: #ffffff12;
+  border-color: #e5bac7;
+  color: #fff5f8;
+}
+.outgoing .quoted-message span {
+  color: #eddae0;
+}
+.outgoing .bubble.search-match {
+  outline-color: #b99135;
+}
+
+.outgoing .bubble.failed .message-meta,
+.outgoing .delivery.failed {
+  color: #ffe0d8;
 }

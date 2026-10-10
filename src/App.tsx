@@ -28,7 +28,7 @@ import {
   Reply,
   RefreshCw,
   Search,
-  Send,
+  ArrowUp,
   ShieldCheck,
   X,
 } from 'lucide-react';
@@ -52,21 +52,11 @@ const date = (timestamp: number) =>
   });
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Произошла ошибка. Попробуйте еще раз.';
-function Logo({
-  small = false,
-  messenger = 'telegram',
-}: {
-  small?: boolean;
-  messenger?: MessengerId;
-}) {
-  const Icon = messenger === 'telegram' ? Send : MessageCircle;
+function Logo({ small = false }: { small?: boolean }) {
   return (
-    <span className={`logo ${small ? 'small' : ''}`}>
-      <Icon
-        size={small ? 23 : 37}
-        fill={messenger === 'telegram' ? 'currentColor' : 'none'}
-        strokeWidth={1.4}
-      />
+    <span className={`logo ${small ? 'small' : ''}`} aria-hidden="true">
+      <span className="logo-line" />
+      <span className="logo-line" />
     </span>
   );
 }
@@ -193,7 +183,7 @@ function Login({ onConnect }: { onConnect: (api: MessengerAdapter, warnings: str
     ? `https://${idInstance.trim().slice(0, 4)}.api.green-api.com`
     : info.defaultApiUrl;
   useEffect(() => {
-    document.title = `${info.label} — GREEN-API Chat`;
+    document.title = `Линия · ${info.label} — GREEN-API`;
   }, [info.label]);
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -219,10 +209,9 @@ function Login({ onConnect }: { onConnect: (api: MessengerAdapter, warnings: str
     <main className="login-page">
       <header className="landing-header">
         <div className="brand">
-          <Logo small messenger={info.id} />
+          <Logo small />
           <span>
-            {info.label} <span className="brand-divider">/</span>{' '}
-            <span className="muted">GREEN-API</span>
+            Линия <span className="brand-divider">/</span> <span className="muted">GREEN-API</span>
           </span>
         </div>
         <a href={info.docsUrl} target="_blank" rel="noreferrer">
@@ -791,10 +780,12 @@ function Messenger({
         <aside className="sidebar">
           <header className="sidebar-header">
             <div className="brand">
-              <Logo small messenger={info.id} />
+              <Logo small />
               <div>
-                <strong>{info.label}</strong>
-                <span className="account-label">GREEN-API · {api.credentials.idInstance}</span>
+                <strong className="wordmark">Линия</strong>
+                <span className="account-label">
+                  {info.label} · {api.credentials.idInstance}
+                </span>
               </div>
             </div>
             {notificationButton()}
@@ -1238,11 +1229,7 @@ function Messenger({
                     aria-label="Отправить сообщение"
                     disabled={sending || !draft.trim()}
                   >
-                    {sending ? (
-                      <span className="spinner" />
-                    ) : (
-                      <Send size={23} fill="currentColor" strokeWidth={1.5} />
-                    )}
+                    {sending ? <span className="spinner" /> : <ArrowUp size={24} strokeWidth={2} />}
                   </button>
                 </form>
                 <div className="composer-hint">
@@ -1263,7 +1250,7 @@ function Messenger({
           ) : (
             <div className="welcome">
               <div className="welcome-icon">
-                <Send size={48} strokeWidth={1.4} />
+                <MessageCircle size={40} strokeWidth={1.4} />
               </div>
               <h1>Откройте переписку</h1>
               <p>
