@@ -976,6 +976,10 @@ test('captures desktop, mobile, search and login presentation screens', async ({
   await expect(page.getByRole('heading', { name: 'Анна Смирнова', exact: true })).toBeVisible();
   await expect(page.getByRole('log')).toContainText('Отлично, до встречи!');
   await page.getByLabel('Сообщение', { exact: true }).fill('До встречи, Анна');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.getByRole('log').evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
   await page.screenshot({ path: testInfo.outputPath('chat-desktop.png'), fullPage: true });
   await openChatSearch(page);
   await page.getByLabel('Текст для поиска').fill('ссылку');
