@@ -6,7 +6,7 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   font-weight: 400;
-  --accent: #315c56;
+  --accent: #1677af;
   --muted: #606c79;
   --border: #e3e8ee;
 }
@@ -63,7 +63,7 @@ textarea {
 input:focus,
 textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px #315c5612;
+  box-shadow: 0 0 0 3px #1677af12;
 }
 input:disabled {
   background: #f7f9fb;
@@ -115,7 +115,7 @@ form > label:first-child {
   width: 84px;
   height: 84px;
   color: white;
-  background: #315c56;
+  background: #2488c5;
   flex-shrink: 0;
 }
 .logo-line {
@@ -164,7 +164,7 @@ form > label:first-child {
   color: white;
 }
 .primary:hover:enabled {
-  background: #264a45;
+  background: #1c77ae;
 }
 .secondary {
   background: #eef2f6;
@@ -388,13 +388,13 @@ details label {
   border-radius: 10px;
   padding: 11px;
   background: white;
-  color: #315c56;
+  color: #176b9b;
   font-size: 13px;
   font-weight: 600;
   margin-top: 12px;
 }
 .new-chat-button:hover {
-  background: #e7eeed;
+  background: #eaf5fb;
 }
 .chat-list {
   overflow-y: auto;
@@ -427,8 +427,8 @@ details label {
   width: 47px;
   height: 47px;
   border-radius: 15px;
-  background: #e1eae9;
-  color: #315c56;
+  background: #e3eff8;
+  color: #176b9b;
   flex-shrink: 0;
   font-size: 16px;
   font-weight: 600;
@@ -561,7 +561,7 @@ details label {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #315c56;
+  color: #176b9b;
   margin-bottom: 16px;
 }
 .welcome h1 {
@@ -658,7 +658,7 @@ details label {
   min-width: 85px;
 }
 .outgoing .bubble {
-  background: #e8eff3;
+  background: #e7f2fb;
   border-radius: 14px 14px 5px 14px;
   color: #27323d;
   border-color: transparent;
@@ -683,10 +683,10 @@ details label {
 }
 .delivery {
   display: flex;
-  color: #315c56;
+  color: #176b9b;
 }
 .delivery.read {
-  color: #315c56;
+  color: #176b9b;
 }
 .delivery.failed,
 .bubble.failed .message-meta {
@@ -759,7 +759,7 @@ details label {
   margin-bottom: 1px;
 }
 .send-button:hover:enabled {
-  background: #264a45;
+  background: #1c77ae;
 }
 .send-button svg {
   margin-left: -2px;
@@ -1129,7 +1129,7 @@ select:disabled {
   display: inline-flex;
   gap: 5px;
   align-items: center;
-  color: #315c56;
+  color: #176b9b;
   background: transparent;
   font-size: 12px;
   padding: 4px 0;
@@ -1170,7 +1170,7 @@ mark {
   border-radius: 2px;
 }
 .bubble.search-match {
-  outline: 2px solid #315c56;
+  outline: 2px solid #1677af;
   outline-offset: 2px;
 }
 .reply-button {
@@ -1184,7 +1184,7 @@ mark {
   margin: 0 5px;
   border-radius: 50%;
   background: #ffffffa6;
-  color: #315c56;
+  color: #176b9b;
   opacity: 0;
 }
 .outgoing .reply-button {
@@ -1205,7 +1205,7 @@ mark {
   background: white;
   border-radius: 10px;
   border-left: 3px solid var(--accent);
-  color: #315c56;
+  color: #176b9b;
 }
 .reply-preview > div {
   flex: 1;
@@ -1228,13 +1228,13 @@ mark {
   align-items: flex-start;
   text-align: left;
   gap: 4px;
-  background: #315c5610;
-  border-left: 3px solid #315c56;
+  background: #1677af10;
+  border-left: 3px solid #1677af;
   border-radius: 4px;
   padding: 7px 9px;
   margin-bottom: 8px;
   width: 100%;
-  color: #315c56;
+  color: #176b9b;
 }
 .quoted-message strong {
   font-size: 11px;
@@ -1369,9 +1369,9 @@ mark {
   color: #58697a;
 }
 .outgoing .quoted-message {
-  background: #315c560a;
-  border-color: #9bbab4;
-  color: #315c56;
+  background: #1677af0a;
+  border-color: #90bdd9;
+  color: #176b9b;
 }
 .outgoing .quoted-message span {
   color: #58697a;
