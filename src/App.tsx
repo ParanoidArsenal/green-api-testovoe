@@ -23,6 +23,7 @@ import {
   EyeOff,
   LogOut,
   MessageCircle,
+  MoreVertical,
   Plus,
   Reply,
   RefreshCw,
@@ -75,6 +76,44 @@ function Alert({ children }: { children: ReactNode }) {
       <CircleAlert size={18} />
       <span>{children}</span>
     </div>
+  );
+}
+function ChatTools({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !ref.current?.contains(event.target))
+        ref.current?.removeAttribute('open');
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    return () => document.removeEventListener('pointerdown', closeOutside);
+  }, []);
+  return (
+    <details
+      className="chat-tools"
+      ref={ref}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          ref.current?.removeAttribute('open');
+          ref.current?.querySelector('summary')?.focus();
+        }
+      }}
+    >
+      <summary className="icon-button" aria-label="Действия чата" title="Действия чата">
+        <MoreVertical size={21} />
+      </summary>
+      <div
+        className="chat-tools-panel"
+        onClick={(event) => {
+          if (event.target instanceof Element && event.target.closest('button')) {
+            ref.current?.removeAttribute('open');
+            ref.current?.querySelector('summary')?.focus();
+          }
+        }}
+      >
+        {children}
+      </div>
+    </details>
   );
 }
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -191,7 +230,6 @@ function Login({ onConnect }: { onConnect: (api: MessengerAdapter, warnings: str
         </a>
       </header>
       <section className="login-card">
-        <Logo messenger={info.id} />
         <h1>Начните разговор</h1>
         <p className="intro">
           Подключите {info.label} через GREEN-API,
@@ -295,7 +333,7 @@ function Login({ onConnect }: { onConnect: (api: MessengerAdapter, warnings: str
         </div>
       </section>
       <footer className="landing-footer">
-        Только текст. Только самое нужное.<span>React · GREEN-API</span>
+        Чат через GREEN-API<span>Текстовые сообщения</span>
       </footer>
     </main>
   );
@@ -346,6 +384,7 @@ function Messenger({
     Record<string, { loading: boolean; count: number; error?: string }>
   >({});
   const [messageSearchOpen, setMessageSearchOpen] = useState(false);
+  const [historyToolsOpen, setHistoryToolsOpen] = useState(false);
   const [messageQuery, setMessageQuery] = useState('');
   const [matchIndex, setMatchIndex] = useState(0);
   const [notificationMode, setNotificationMode] = useState<'off' | 'on' | 'denied' | 'unsupported'>(
@@ -491,6 +530,7 @@ function Messenger({
     setMessageQuery('');
     setMatchIndex(0);
     setMessageSearchOpen(false);
+    setHistoryToolsOpen(false);
     if (chat?.id && !historyRequests.current.has(chat.id)) void loadHistory(chat.id, 100);
     // Each chat's history loads once on first selection; refresh and expansion are explicit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -542,9 +582,9 @@ function Messenger({
   }
   const notificationLabel =
     notificationMode === 'on' ? 'Выключить уведомления' : 'Включить уведомления';
-  const notificationButton = (mobile = false) => (
+  const notificationButton = () => (
     <button
-      className={`icon-button ${mobile ? 'mobile-notifications' : ''}`}
+      className="icon-button"
       aria-label={notificationLabel}
       aria-pressed={notificationMode === 'on'}
       title={
@@ -872,16 +912,37 @@ function Messenger({
                     </span>
                   </p>
                 </div>
-                {notificationButton(true)}
-                <button
-                  className="icon-button"
-                  aria-label="Поиск по сообщениям"
-                  title="Поиск по сообщениям"
-                  aria-expanded={messageSearchOpen}
-                  onClick={() => setMessageSearchOpen((value) => !value)}
-                >
-                  <Search size={20} />
-                </button>
+                <ChatTools key={chat.id}>
+                  <button
+                    className="chat-tool-item"
+                    aria-label="Поиск по сообщениям"
+                    title="Поиск по сообщениям"
+                    aria-expanded={messageSearchOpen}
+                    onClick={() => setMessageSearchOpen((value) => !value)}
+                  >
+                    <Search size={20} />
+                    Поиск по сообщениям
+                  </button>
+                  <button
+                    className="chat-tool-item"
+                    aria-label="Управление историей"
+                    aria-expanded={historyToolsOpen}
+                    onClick={() => setHistoryToolsOpen((value) => !value)}
+                  >
+                    <RefreshCw size={19} />
+                    История переписки
+                  </button>
+                  <button
+                    className="chat-tool-item mobile-notifications"
+                    aria-label={notificationLabel}
+                    aria-pressed={notificationMode === 'on'}
+                    disabled={requestingPermission}
+                    onClick={() => void toggleNotifications()}
+                  >
+                    {notificationMode === 'on' ? <Bell size={19} /> : <BellOff size={19} />}
+                    {notificationLabel}
+                  </button>
+                </ChatTools>
               </header>
               {messageSearchOpen && (
                 <div className="message-search" role="search" aria-label="Поиск в переписке">
@@ -954,38 +1015,57 @@ function Messenger({
                   </button>
                 </div>
               )}
-              <div className="history-toolbar">
-                <span role="status">
-                  {history[chat.id]?.loading
-                    ? 'Загрузка истории…'
-                    : `История: до ${history[chat.id]?.count ?? 100} сообщений`}
-                </span>
-                <button
-                  className="history-button"
-                  disabled={history[chat.id]?.loading}
-                  onClick={() => void loadHistory(chat.id, history[chat.id]?.count ?? 100)}
-                >
-                  <RefreshCw size={14} />
-                  {history[chat.id]?.error ? 'Повторить загрузку истории' : 'Обновить историю'}
-                </button>
-                {(history[chat.id]?.count ?? 100) < 5000 && (
+              {historyToolsOpen && (
+                <div className="history-toolbar">
+                  <span role="status">
+                    {history[chat.id]?.loading
+                      ? 'Загрузка истории…'
+                      : `История: до ${history[chat.id]?.count ?? 100} сообщений`}
+                  </span>
                   <button
                     className="history-button"
                     disabled={history[chat.id]?.loading}
-                    onClick={() =>
-                      void loadHistory(
-                        chat.id,
-                        Math.min((history[chat.id]?.count ?? 100) * 5, 5000),
-                      )
-                    }
+                    onClick={() => void loadHistory(chat.id, history[chat.id]?.count ?? 100)}
                   >
-                    Загрузить больше
+                    <RefreshCw size={14} />
+                    {history[chat.id]?.error ? 'Повторить загрузку истории' : 'Обновить историю'}
                   </button>
-                )}
-              </div>
+                  {(history[chat.id]?.count ?? 100) < 5000 && (
+                    <button
+                      className="history-button"
+                      disabled={history[chat.id]?.loading}
+                      onClick={() =>
+                        void loadHistory(
+                          chat.id,
+                          Math.min((history[chat.id]?.count ?? 100) * 5, 5000),
+                        )
+                      }
+                    >
+                      Загрузить больше
+                    </button>
+                  )}
+                  <button
+                    className="icon-button"
+                    aria-label="Закрыть управление историей"
+                    onClick={() => setHistoryToolsOpen(false)}
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+              )}
               {history[chat.id]?.error && (
                 <div className="history-error" role="alert">
-                  {history[chat.id].error} Текущая переписка доступна; можно продолжить отправку.
+                  <span>
+                    {history[chat.id].error} Текущая переписка доступна; можно продолжить отправку.
+                  </span>
+                  {!historyToolsOpen && (
+                    <button
+                      className="history-button"
+                      onClick={() => void loadHistory(chat.id, history[chat.id]?.count ?? 100)}
+                    >
+                      Повторить загрузку истории
+                    </button>
+                  )}
                 </div>
               )}
               <div
@@ -1002,6 +1082,11 @@ function Messenger({
                 }}
               >
                 <div className="message-column">
+                  {history[chat.id]?.loading && !chat.messages.length && (
+                    <div className="history-loading" role="status">
+                      Загрузка сообщений…
+                    </div>
+                  )}
                   {!chat.messages.length && !history[chat.id]?.loading && (
                     <div className="chat-start">
                       <MessageCircle size={28} />
@@ -1180,11 +1265,7 @@ function Messenger({
               <div className="welcome-icon">
                 <Send size={48} strokeWidth={1.4} />
               </div>
-              <span className="eyebrow">{info.label.toUpperCase()} · ТОЛЬКО ТЕКСТ</span>
-              <h1>
-                Разговор начинается
-                <br />с одного сообщения
-              </h1>
+              <h1>Откройте переписку</h1>
               <p>
                 Создайте новый чат по номеру телефона
                 <br />

@@ -114,6 +114,15 @@ async function createChat(page: Page, phone = '+7 (999) 123-45-67') {
   await page.getByRole('dialog').getByRole('button', { name: 'Создать чат', exact: true }).click();
   await expect(page.getByRole('heading', { name: `+${phone.replace(/\D/g, '')}` })).toBeVisible();
 }
+async function openChatSearch(page: Page) {
+  await page.getByLabel('Действия чата', { exact: true }).click();
+  await page.getByRole('button', { name: 'Поиск по сообщениям', exact: true }).click();
+}
+async function openHistoryTools(page: Page) {
+  if (await page.locator('.history-toolbar').isVisible()) return;
+  await page.getByLabel('Действия чата', { exact: true }).click();
+  await page.getByRole('button', { name: 'Управление историей', exact: true }).click();
+}
 test('login, create, send, receive, deduplicate, and logout', async ({ page }, testInfo) => {
   const api = await mockApi(page);
   await login(page);
@@ -266,23 +275,18 @@ test('focuses the phone field and restores the trigger after closing a dialog', 
 test('preserves history scroll position and tracks unread messages in another chat', async ({
   page,
 }) => {
-  const api = await mockApi(page);
+  const api = await mockApi(page, {
+    history: Array.from({ length: 45 }, (_, index) => ({
+      type: 'incoming',
+      idMessage: `history-${index}`,
+      timestamp: 1763115112 + index,
+      typeMessage: 'textMessage',
+      textMessage: `Сообщение ${index}\nНесколько строк\nДля проверки истории`,
+    })),
+  });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await login(page);
   await createChat(page);
-  for (let index = 0; index < 45; index++)
-    api.queue.push({
-      typeWebhook: 'incomingMessageReceived',
-      idMessage: `history-${index}`,
-      timestamp: 1763115112 + index,
-      senderData: { chatId: '12345678', senderName: 'Анна', chatType: 'user' },
-      messageData: {
-        typeMessage: 'textMessage',
-        textMessageData: {
-          textMessage: `Сообщение ${index}\nНесколько строк\nДля проверки истории`,
-        },
-      },
-    });
   await expect(page.getByRole('log')).toContainText('Сообщение 44', { timeout: 20000 });
   await page.getByRole('log').evaluate((element) => {
     element.scrollTop = 0;
@@ -495,10 +499,11 @@ for (const messenger of ['telegram', 'max', 'whatsapp'] as const) {
     await createChat(page);
     await expect(page.getByRole('log')).toContainText('Обсудим проект завтра');
     expect(api.historyRequests).toEqual([{ chatId, count: 100 }]);
+    await openHistoryTools(page);
     await page.getByRole('button', { name: 'Обновить историю', exact: true }).click();
     await expect.poll(() => api.historyRequests.length).toBe(2);
     await expect(page.getByRole('log').locator('.bubble')).toHaveCount(2);
-    await page.getByRole('button', { name: 'Поиск по сообщениям', exact: true }).click();
+    await openChatSearch(page);
     const query = page.getByRole('textbox', { name: 'Текст для поиска' });
     await expect(query).toBeFocused();
     await query.fill('ПРОЕКТ');
@@ -676,6 +681,7 @@ test('notifications require opt-in, ignore history and duplicates, open the chat
       textMessage: 'Ранее полученный текст',
     },
   ];
+  await openHistoryTools(page);
   await page.getByRole('button', { name: 'Обновить историю', exact: true }).click();
   await expect(page.getByRole('log')).toContainText('Ранее полученный текст');
   api.queue.push(
@@ -802,6 +808,7 @@ test('history expansion preserves the visible message for older and newer additi
   await login(page);
   await createChat(page);
   await expect(page.getByRole('log')).toContainText('История 34');
+  await openHistoryTools(page);
   await page.getByRole('log').evaluate((element) => {
     element.scrollTop = 150;
   });
@@ -827,6 +834,7 @@ test('history expansion preserves the visible message for older and newer additi
       textMessage: 'Ответ из обновленной истории',
     },
   ];
+  await openHistoryTools(page);
   await page.getByRole('button', { name: 'Обновить историю', exact: true }).click();
   await expect(page.getByRole('log')).toContainText('Самое раннее сообщение');
   await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThan(2);
@@ -838,6 +846,7 @@ test('history expansion preserves the visible message for older and newer additi
     typeMessage: 'textMessage',
     textMessage: 'Только новое сообщение снизу',
   });
+  await openHistoryTools(page);
   await page.getByRole('button', { name: 'Обновить историю', exact: true }).click();
   await expect(page.getByRole('log')).toContainText('Только новое сообщение снизу');
   await expect
@@ -862,7 +871,7 @@ test('mobile search and quote controls stay accessible and cancellation restores
   await login(page);
   await createChat(page);
   await expect(page.getByRole('log')).toContainText('Проверка мобильного поиска');
-  await page.getByRole('button', { name: 'Поиск по сообщениям', exact: true }).click();
+  await openChatSearch(page);
   await page.getByLabel('Текст для поиска').fill('мобильного');
   await expect(page.locator('.search-count')).toHaveText('1 из 1');
   await page.getByRole('button', { name: 'Закрыть поиск сообщений' }).click();
@@ -876,4 +885,115 @@ test('mobile search and quote controls stay accessible and cancellation restores
   );
   await page.getByRole('button', { name: 'Отменить ответ' }).click();
   await expect(page.getByLabel('Сообщение', { exact: true })).toBeFocused();
+});
+
+test('chat actions keep the main screen simple and support keyboard dismissal', async ({
+  page,
+}) => {
+  await mockApi(page);
+  await login(page);
+  await createChat(page);
+  await expect(page.locator('.history-toolbar')).not.toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Поиск по сообщениям', exact: true }),
+  ).not.toBeVisible();
+  const trigger = page.getByLabel('Действия чата', { exact: true });
+  await trigger.focus();
+  await trigger.press('Enter');
+  await expect(page.getByRole('button', { name: 'Управление историей' })).toBeVisible();
+  await trigger.press('Escape');
+  await expect(trigger).toBeFocused();
+  await expect(page.locator('.chat-tools')).not.toHaveAttribute('open', '');
+  await trigger.click();
+  await page.getByLabel('Сообщение', { exact: true }).click();
+  await expect(page.locator('.chat-tools')).not.toHaveAttribute('open', '');
+  await openHistoryTools(page);
+  await expect(page.getByRole('button', { name: 'Обновить историю', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Закрыть управление историей' }).click();
+  await expect(page.locator('.history-toolbar')).not.toBeVisible();
+});
+test('captures desktop, mobile, search and login presentation screens', async ({
+  page,
+}, testInfo) => {
+  const base = Math.floor(Date.now() / 1000) - 3600;
+  const api = await mockApi(page, {
+    history: [
+      {
+        type: 'incoming',
+        idMessage: 'show-1',
+        timestamp: base,
+        typeMessage: 'textMessage',
+        textMessage: 'Привет! Посмотрела фотографии с выходных. Очень красиво получилось.',
+      },
+      {
+        type: 'outgoing',
+        idMessage: 'show-2',
+        timestamp: base + 120,
+        typeMessage: 'textMessage',
+        textMessage: 'Спасибо! В следующий раз давай съездим вместе.',
+        statusMessage: 'read',
+      },
+      {
+        type: 'incoming',
+        idMessage: 'show-3',
+        timestamp: base + 180,
+        typeMessage: 'textMessage',
+        textMessage:
+          'Давай сегодня обсудим планы на следующую поездку?\nБуду свободна после 16:00.',
+      },
+      {
+        type: 'outgoing',
+        idMessage: 'show-4',
+        timestamp: base + 240,
+        typeMessage: 'quotedMessage',
+        extendedTextMessage: {
+          text: 'Да, договорились. Пришлю ссылку ближе к четырём.',
+          stanzaId: 'show-3',
+        },
+        statusMessage: 'read',
+      },
+    ],
+  });
+  await page.goto('/');
+  const connect = await page
+    .getByRole('button', { name: 'Подключиться', exact: true })
+    .boundingBox();
+  expect(connect!.y + connect!.height).toBeLessThanOrEqual(720);
+  await page.screenshot({ path: testInfo.outputPath('login.png'), fullPage: true });
+  await login(page);
+  await createChat(page);
+  await expect(page.getByRole('log')).toContainText('Пришлю ссылку');
+  api.queue.push({
+    typeWebhook: 'incomingMessageReceived',
+    idMessage: 'show-5',
+    timestamp: base + 300,
+    senderData: { chatId: '12345678', senderName: 'Анна Смирнова', senderPhoneNumber: 79991234567 },
+    messageData: {
+      typeMessage: 'textMessage',
+      textMessageData: { textMessage: 'Отлично, до встречи!' },
+    },
+  });
+  await expect(page.getByRole('heading', { name: 'Анна Смирнова', exact: true })).toBeVisible();
+  await expect(page.getByRole('log')).toContainText('Отлично, до встречи!');
+  await page.getByLabel('Сообщение', { exact: true }).fill('До встречи, Анна');
+  await page.screenshot({ path: testInfo.outputPath('chat-desktop.png'), fullPage: true });
+  await openChatSearch(page);
+  await page.getByLabel('Текст для поиска').fill('ссылку');
+  await expect(page.locator('.search-count')).toHaveText('1 из 1');
+  await page.screenshot({ path: testInfo.outputPath('message-search.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Закрыть поиск сообщений' }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole('button', { name: 'Ответить на сообщение: Отлично, до встречи!', exact: true })
+    .click();
+  await expect(page.getByLabel('Цитируемое сообщение')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('chat-mobile.png'), fullPage: true });
+  await page.getByLabel('Действия чата', { exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Включить уведомления', exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('chat-menu-mobile.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 });
